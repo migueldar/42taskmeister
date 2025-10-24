@@ -1,33 +1,24 @@
-#![allow(warnings)]
+mod config;
 
+use config::Config;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use serde::Deserialize;
-use std::env;
-use std::io::{Read, Write};
-use std::net::{SocketAddrV4, TcpStream, ToSocketAddrs};
-use taskmeister::{Request, Response};
+use std::io::Write;
+use std::net::TcpStream;
+use std::process;
+use taskmeister::{Request, Response, ResponsePart};
 
-// const config_file_path: String = "~/.config/taskmeister/client.conf";
-
-struct Config {
-    sock_addr: SocketAddrV4,
-    prompt: String,
-    history_file: String,
-}
-
-impl Config {
-    fn new() -> Config {
-        Config {
-            sock_addr: "127.0.0.1:8888".parse().unwrap(),
-            prompt: "taskmeister> ".to_string(),
-            history_file: "/smt/log".to_string(),
-        }
-    }
+#[derive(Copy, Clone)]
+enum ExitCodes {
+    OK = 0,
+    SIGINT = 1,
+    COMMANDERROR = 2,
+    OTHERERROR = 3,
 }
 
 fn line_to_request(line: &str) -> Request {
-    let mut splitted_line = line.split(" ");
+    let mut splitted_line = line.split_whitespace();
     let mut ret = Request {
         command: splitted_line.next().unwrap().to_string(),
         flags: vec![],
@@ -44,21 +35,30 @@ fn line_to_request(line: &str) -> Request {
     ret
 }
 
-fn str_is_spaces(line: &String) -> bool {
-    for c in line.chars() {
-        if c != ' ' {
-            return false;
+fn str_is_spaces(line: &str) -> bool {
+    line.split_whitespace().next().is_none()
+}
+
+fn process_response(res: &Response, exit_code: &mut ExitCodes) {
+    *exit_code = ExitCodes::OK;
+    for r in res.iter() {
+        println!("{}", r);
+        if !matches!(exit_code, ExitCodes::COMMANDERROR) && matches!(r, ResponsePart::Error(_)) {
+            *exit_code = ExitCodes::COMMANDERROR;
         }
     }
-    return true;
 }
 
 fn main() -> std::io::Result<()> {
-    let config: Config = Config::new();
-    let mut sock_write: TcpStream = TcpStream::connect("127.0.0.1:8888")?;
-    let mut rl = DefaultEditor::new().unwrap();
-    let mut sock_read: TcpStream = sock_write.try_clone()?;
+    let config: Config = Config::load(None, None).unwrap();
+
+    let mut sock_write: TcpStream = TcpStream::connect(config.server_addr)?;
+    let sock_read: TcpStream = sock_write.try_clone()?;
     let mut res = serde_json::Deserializer::from_reader(&sock_read);
+    let mut exit_code = ExitCodes::OK;
+
+    let mut rl = DefaultEditor::new().unwrap();
+    // rl.load_history(&config.history_file).unwrap();
 
     loop {
         let readline = rl.readline(&config.prompt);
@@ -74,21 +74,23 @@ fn main() -> std::io::Result<()> {
                     .write(serde_json::to_string(&req)?.as_bytes())
                     .unwrap();
                 let res: Response = Response::deserialize(&mut res)?;
-                println!("{:?}", res);
-            }
-            Err(ReadlineError::Interrupted) => {
-                println!("CTRL-C");
-                break;
+                process_response(&res, &mut exit_code);
             }
             Err(ReadlineError::Eof) => {
-                println!("CTRL-D");
+                break;
+            }
+            Err(ReadlineError::Interrupted) => {
+                exit_code = ExitCodes::SIGINT;
                 break;
             }
             Err(err) => {
                 println!("Error: {:?}", err);
+                exit_code = ExitCodes::OTHERERROR;
                 break;
             }
         }
     }
-    Ok(())
+
+    // rl.save_history(&config.history_file).unwrap();
+    process::exit(exit_code as i32);
 }
