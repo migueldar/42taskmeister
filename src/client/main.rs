@@ -36,7 +36,7 @@ fn line_to_request(line: &str) -> Request {
 }
 
 fn str_is_spaces(line: &str) -> bool {
-    line.split_whitespace().next().is_none()
+    !line.contains(|c: char| !c.is_whitespace())
 }
 
 fn process_response(res: &Response, exit_code: &mut ExitCodes) {
