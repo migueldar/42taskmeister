@@ -1,13 +1,10 @@
-mod config;
-
-use config::Config;
-use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
+use rustyline::DefaultEditor;
 use serde::Deserialize;
 use std::io::Write;
 use std::net::TcpStream;
 use std::process;
-use taskmeister::{Request, Response, ResponsePart};
+use taskmeister::{config::Config, Request, Response, ResponsePart};
 
 #[derive(Copy, Clone)]
 enum ExitCodes {
@@ -50,7 +47,7 @@ fn process_response(res: &Response, exit_code: &mut ExitCodes) {
 }
 
 fn main() -> std::io::Result<()> {
-    let config: Config = Config::load(None, None).unwrap();
+    let config: Config = Config::load(None).unwrap();
 
     let mut sock_write: TcpStream = TcpStream::connect(config.server_addr)?;
     let sock_read: TcpStream = sock_write.try_clone()?;
