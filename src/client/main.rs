@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::io::Write;
 use std::net::TcpStream;
 use std::process;
-use taskmeister::{config::Config, Request, Response, ResponsePart};
+use taskmeister::{config, config::Config, Request, Response, ResponsePart};
 
 #[derive(Copy, Clone)]
 enum ExitCodes {
@@ -47,7 +47,7 @@ fn process_response(res: &Response, exit_code: &mut ExitCodes) {
 }
 
 fn main() -> std::io::Result<()> {
-    let config: Config = Config::load(None).unwrap();
+    let config = Config::load(config::parse_config_path()).unwrap();
 
     let mut sock_write: TcpStream = TcpStream::connect(config.server_addr)?;
     let sock_read: TcpStream = sock_write.try_clone()?;

@@ -1,16 +1,14 @@
-#![allow(warnings)]
-
 use serde::{Deserialize, Serialize};
 use std::{
     env,
     error::Error,
     fs::{self, File},
     io::Write,
-    net::{AddrParseError, SocketAddrV4},
+    net::SocketAddrV4,
     path::PathBuf,
 };
 
-const def_config_path: &str = "~/.config/taskmeister/client.conf";
+const DEF_CONFIG_PATH: &str = "~/.config/taskmeister.toml";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -21,23 +19,23 @@ pub struct Config {
 
 impl Config {
     pub fn load(path: Option<PathBuf>) -> Result<Config, Box<dyn Error>> {
-        let config = Config {
-            server_addr: "127.0.0.1:14242".parse()?,
-            prompt: "taskmeister> ".to_string(),
-            history_file: expand_home_dir("~/.taskmeister_history"),
+        let config_file = match path {
+            Some(p) => p,
+            None => expand_home_dir(DEF_CONFIG_PATH),
         };
 
-        // check if file was passed and exists (error if it does)
-        // take default values that are not in file
+        if !config_file.is_file() {
+            let config = Config {
+                server_addr: "127.0.0.1:14242".parse()?,
+                prompt: "taskmeister> ".to_string(),
+                history_file: expand_home_dir("~/.taskmeister_history"),
+            };
 
-        let Some(config_file) = path else {
-            let cf = expand_home_dir(def_config_path);
-
-            if let Some(parent) = cf.parent() {
+            if let Some(parent) = config_file.parent() {
                 fs::create_dir_all(parent)?
             }
 
-            File::create(cf)?.write(toml::to_string(&config)?.as_bytes());
+            File::create(config_file)?.write(toml::to_string(&config)?.as_bytes())?;
             return Ok(config);
         };
 
