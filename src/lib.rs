@@ -1,4 +1,6 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+
+pub mod utils;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Request {
@@ -7,7 +9,7 @@ pub struct Request {
     pub args: Vec<String>,
 }
 
-pub type Response = Vec<ResponsePart>; 
+pub type Response = Vec<ResponsePart>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ResponsePart {
@@ -19,7 +21,7 @@ impl std::fmt::Display for ResponsePart {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ResponsePart::Info(message) => write!(f, "{}", message),
-            ResponsePart::Error(message) => write!(f, "Error: {}", message)
+            ResponsePart::Error(message) => write!(f, "Error: {}", message),
         }
     }
 }
