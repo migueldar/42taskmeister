@@ -6,7 +6,7 @@ use std::{
 };
 
 use serde::Deserialize;
-use taskmeister::{Request, Response, ResponsePart};
+use taskmeister::{config, config::Config, Request, Response, ResponsePart};
 
 // this is here for client testing purposes
 fn process_request(req: &Request) -> Response {
@@ -21,6 +21,9 @@ fn process_request(req: &Request) -> Response {
 }
 
 fn main() -> std::io::Result<()> {
+    let config = Config::load(config::parse_config_path()).unwrap();
+    println!("{:#?}", config);
+
     let listen_sock_addr: SocketAddrV4 = "127.0.0.1:14242".parse().unwrap();
     let listen_sock: TcpListener = TcpListener::bind(listen_sock_addr)?;
 
