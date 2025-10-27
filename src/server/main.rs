@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::{
     error::Error,
     io::Write,
-    net::{SocketAddrV4, TcpListener, TcpStream},
+    net::{TcpListener, TcpStream},
     thread::{self},
 };
 use taskmeister::{utils, Request, Response, ResponsePart};
@@ -23,13 +23,14 @@ fn process_request(req: &Request) -> Response {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let config = Config::load(utils::parse_config_path())?;
-    println!("{:#?}", config);
+    let (cfg_path, args) = utils::parse_config_path();
+    let mut config = Config::load(cfg_path)?;
 
-    // TODO: Override server addr with input args
+    if let Some(a) = args {
+        config.server_addr = a.parse()?;
+    }
 
-    let listen_sock_addr: SocketAddrV4 = "127.0.0.1:14242".parse().unwrap();
-    let listen_sock: TcpListener = TcpListener::bind(listen_sock_addr)?;
+    let listen_sock: TcpListener = TcpListener::bind(config.server_addr)?;
 
     loop {
         let sock_read: TcpStream = listen_sock.accept()?.0;
