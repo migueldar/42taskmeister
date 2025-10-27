@@ -11,15 +11,25 @@ use taskmeister::utils;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub server_addr: SocketAddrV4,
-    pub prompt: String,
-    pub history_file: PathBuf,
+    pub logs: PathBuf,
+    pub include: Include,
+    pub start: Start,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Include {
+    pub path: Vec<PathBuf>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Start {
+    pub services: Vec<String>,
 }
 
 // Default values
-pub const CONFIG_PATH: &str = "~/.config/taskmeiker/client.toml";
+pub const CONFIG_PATH: &str = "~/.config/taskmeiker/server.toml";
 pub const SERVER_ADDR: &str = "127.0.0.1:14242";
-pub const PROMPT: &str = "taskmeister>";
-pub const HISTORY_FILE: &str = "~/.taskmeister_history";
+pub const LOGS_FILE: &str = "~/.config/taskmeiker/logs.txt";
 
 impl Config {
     pub fn load(path: Option<PathBuf>) -> Result<Config, Box<dyn Error>> {
@@ -41,8 +51,11 @@ impl Config {
 
             let c = Config {
                 server_addr: SERVER_ADDR.parse()?,
-                prompt: PROMPT.parse()?,
-                history_file: utils::expand_home_dir(HISTORY_FILE),
+                logs: utils::expand_home_dir(LOGS_FILE),
+                include: Include { path: Vec::new() },
+                start: Start {
+                    services: Vec::new(),
+                },
             };
 
             File::create(&config_file)?.write(toml::to_string(&c)?.as_bytes())?;

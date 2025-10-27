@@ -1,12 +1,14 @@
-#![allow(warnings)]
-use std::{
-    io::{Read, Write},
-    net::{SocketAddrV4, TcpListener, TcpStream},
-    thread::{self, JoinHandle},
-};
+mod config;
 
+use config::Config;
 use serde::Deserialize;
-use taskmeister::{config, config::Config, Request, Response, ResponsePart};
+use std::{
+    error::Error,
+    io::Write,
+    net::{SocketAddrV4, TcpListener, TcpStream},
+    thread::{self},
+};
+use taskmeister::{utils, Request, Response, ResponsePart};
 
 // this is here for client testing purposes
 fn process_request(req: &Request) -> Response {
@@ -20,15 +22,17 @@ fn process_request(req: &Request) -> Response {
     res
 }
 
-fn main() -> std::io::Result<()> {
-    let config = Config::load(config::parse_config_path()).unwrap();
+fn main() -> Result<(), Box<dyn Error>> {
+    let config = Config::load(utils::parse_config_path())?;
     println!("{:#?}", config);
+
+    // TODO: Override server addr with input args
 
     let listen_sock_addr: SocketAddrV4 = "127.0.0.1:14242".parse().unwrap();
     let listen_sock: TcpListener = TcpListener::bind(listen_sock_addr)?;
 
     loop {
-        let mut sock_read: TcpStream = listen_sock.accept()?.0;
+        let sock_read: TcpStream = listen_sock.accept()?.0;
         thread::spawn(move || -> std::io::Result<()> {
             println!("entering thread");
             let mut deserializer = serde_json::Deserializer::from_reader(&sock_read);
