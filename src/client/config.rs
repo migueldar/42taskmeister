@@ -4,7 +4,7 @@ use std::{
     fs::{self, File},
     io::Write,
     net::SocketAddrV4,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 use taskmeister::utils;
 
@@ -26,7 +26,9 @@ impl Config {
         let is_flag = path.is_some();
 
         // Does path contain something?
-        let config_file = path.unwrap_or(PathBuf::from(utils::expand_home_dir(CONFIG_PATH)));
+        let config_file = path.unwrap_or(PathBuf::from(utils::expand_home_dir(Path::new(
+            CONFIG_PATH,
+        ))));
 
         if !config_file.is_file() {
             // Early return if the path was inserted with the flag and does not exist
@@ -42,7 +44,7 @@ impl Config {
             let c = Config {
                 server_addr: SERVER_ADDR.parse()?,
                 prompt: PROMPT.parse()?,
-                history_file: utils::expand_home_dir(HISTORY_FILE),
+                history_file: utils::expand_home_dir(Path::new(HISTORY_FILE)),
             };
 
             File::create(&config_file)?.write(toml::to_string(&c)?.as_bytes())?;

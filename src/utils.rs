@@ -1,4 +1,7 @@
-use std::{env, path::PathBuf};
+use std::{
+    env, fs, io,
+    path::{Path, PathBuf},
+};
 
 // TODO: Dummy implementation, only parsing "-f" flag, extend this if
 // needed more flags appart from "-f"
@@ -16,12 +19,28 @@ pub fn parse_config_path() -> (Option<PathBuf>, Option<String>) {
 }
 
 // Only needed for non-shell inputs
-pub fn expand_home_dir(path: &str) -> PathBuf {
-    if let Some(s) = path.strip_prefix("~/") {
+pub fn expand_home_dir(path: &Path) -> PathBuf {
+    if let Ok(s) = path.strip_prefix("~/") {
         if let Some(mut home) = env::home_dir() {
-            home.push(PathBuf::from(s));
+            home.push(s);
             return home;
         }
     }
     PathBuf::from(path)
+}
+
+pub fn walk_dir<F>(path: PathBuf, f: &mut F) -> Result<(), io::Error>
+where
+    F: FnMut(PathBuf) -> Result<(), io::Error>,
+{
+    if path.is_file() {
+        f(path)
+    } else if path.is_dir() {
+        for dir_entry in fs::read_dir(path)? {
+            walk_dir(dir_entry?.path(), f)?;
+        }
+        Ok(())
+    } else {
+        Ok(())
+    }
 }

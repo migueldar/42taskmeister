@@ -1,4 +1,5 @@
 mod config;
+mod service;
 
 use config::Config;
 use serde::Deserialize;
@@ -29,6 +30,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Some(a) = args {
         config.server_addr = a.parse()?;
     }
+
+    let services = config.load_services()?;
+
+    println!("{services:#?}");
 
     let listen_sock: TcpListener = TcpListener::bind(config.server_addr)?;
 
