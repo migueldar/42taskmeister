@@ -1,10 +1,8 @@
-use super::service;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
     error::Error,
     fs::{self, File},
-    io::{self, Write},
+    io::Write,
     net::SocketAddrV4,
     path::{Path, PathBuf},
 };
@@ -75,20 +73,7 @@ impl Config {
             ..toml::from_str(&fs::read_to_string(&config_file)?)?
         })
     }
-    pub fn load_services(&self) -> Result<HashMap<PathBuf, service::Service>, io::Error> {
-        let mut srvcs = HashMap::new();
-
-        for p in &self.include.paths {
-            let p = utils::expand_home_dir(p);
-            utils::walk_dir(p, &mut |closure_p| {
-                let Ok(s) = toml::from_str(&fs::read_to_string(&closure_p)?) else {
-                    return Err(io::Error::other("Couldn't deserialize"));
-                };
-
-                srvcs.insert(closure_p, s);
-                Ok(())
-            })?;
-        }
-        Ok(srvcs)
+    pub fn get_includes(&self) -> &Vec<PathBuf> {
+        &self.include.paths
     }
 }

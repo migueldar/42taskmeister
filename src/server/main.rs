@@ -3,6 +3,7 @@ mod service;
 
 use config::Config;
 use serde::Deserialize;
+use service::Services;
 use std::{
     error::Error,
     io::Write,
@@ -31,9 +32,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.server_addr = a.parse()?;
     }
 
-    let services = config.load_services()?;
+    let mut services = Services::load(config.get_includes())?;
 
     println!("{services:#?}");
+
+    let up = services.update(Services::load(config.get_includes())?);
 
     let listen_sock: TcpListener = TcpListener::bind(config.server_addr)?;
 
