@@ -3,11 +3,12 @@ mod service;
 
 use config::Config;
 use serde::Deserialize;
-use service::Services;
+use service::{Services, Update};
 use std::{
     error::Error,
     io::Write,
     net::{TcpListener, TcpStream},
+    sync::{Arc, Mutex},
     thread::{self},
 };
 use taskmeister::{utils, Request, Response, ResponsePart};
@@ -32,17 +33,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.server_addr = a.parse()?;
     }
 
-    let mut services = Services::load(config.get_includes())?;
-
-    println!("{services:#?}");
-
-    let up = services.update(Services::load(config.get_includes())?);
-
+    let services = Arc::new(Mutex::new(Services::load(config.get_includes())?));
     let listen_sock: TcpListener = TcpListener::bind(config.server_addr)?;
+    let config = Arc::new(Mutex::new(config));
 
     loop {
         let sock_read: TcpStream = listen_sock.accept()?.0;
-        thread::spawn(move || -> std::io::Result<()> {
+        let config = Arc::clone(&config);
+        let services = Arc::clone(&services);
+
+        let handle = thread::spawn(move || -> std::io::Result<()> {
             println!("entering thread");
             let mut deserializer = serde_json::Deserializer::from_reader(&sock_read);
             let mut sock_write: TcpStream = sock_read.try_clone()?;
@@ -52,7 +52,32 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!("Request: {:?}", req);
                 let res: Response = process_request(&req);
                 sock_write.write(serde_json::to_string(&res)?.as_bytes())?;
+
+                let mut srv = services.lock().unwrap();
+                let conf = config.lock().unwrap();
+
+                let up = match Services::load(conf.get_includes()) {
+                    Ok(inc) => srv.update(inc),
+                    Err(e) => {
+                        println!("Error loading includes: {e}");
+                        continue;
+                    }
+                };
+
+                for u in up {
+                    match &u {
+                        Update::Start(a) => println!("Start:\n{:#?}", srv.get(a).unwrap()),
+                        Update::Reload(a) => println!("Reload:\n{:#?}", srv.get(a).unwrap()),
+                        Update::Stop(a) => {
+                            println!("Stop:\n{:#?}", srv.get(a).unwrap());
+                            // For now just remove the service
+                            srv.stop(a);
+                        }
+                    }
+                }
             }
         });
+
+        let _ = handle.join().unwrap();
     }
 }

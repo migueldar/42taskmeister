@@ -7,6 +7,7 @@ use std::{
 use taskmeister::utils;
 
 /// Actions on services and the alias of that service
+#[derive(Debug)]
 pub enum Update {
     Start(String),
     Reload(String),
@@ -75,7 +76,7 @@ impl Services {
 
     /// Update current Services with the new structure: new becomes the new services
     /// and a diff is returned with the services that changed
-    pub fn update(&mut self, new: Services) -> Vec<Update> {
+    pub fn update(&mut self, mut new: Services) -> Vec<Update> {
         let mut up = vec![];
 
         for (alias, serv) in &new.0 {
@@ -84,8 +85,8 @@ impl Services {
                     // If self contains the entry, check if it changed
                     if *o.get() != *serv {
                         up.push(Update::Reload(alias.clone()));
-                        self.0.remove(alias);
                     }
+                    self.0.remove(alias);
                 }
                 Entry::Vacant(_) => up.push(Update::Start(alias.clone())),
             };
@@ -95,8 +96,18 @@ impl Services {
         up.extend(self.0.iter().map(|(alias, _)| Update::Stop(alias.clone())));
 
         // Update self with the new entries
+        new.0.extend(self.0.drain());
         *self = new;
 
         up
+    }
+
+    pub fn get(&self, alias: &str) -> Option<&Service> {
+        self.0.get(alias)
+    }
+
+    pub fn stop(&mut self, alias: &str) -> Option<Service> {
+        // TODO: implement
+        self.0.remove(alias)
     }
 }
