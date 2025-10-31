@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{hash_map::Entry, HashMap},
-    fs, io,
+    fs::{self, OpenOptions},
+    io,
     path::PathBuf,
+    process::{Child, Command, Stdio},
+    sync::mpsc::Sender,
 };
 use taskmeister::dir_utils;
 
@@ -32,7 +35,8 @@ pub struct Service {
     timeout: u32,
     stop_signal: u32,
     stop_wait: u32,
-    // redirect: File,
+    stdout: String,
+    stdin: String,
     variables: Vec<(String, String)>,
     working_dir: PathBuf,
     umask: u16,
@@ -117,5 +121,43 @@ impl Services {
 
     pub fn remove(&mut self, alias: &str) -> Option<Service> {
         self.0.remove(alias)
+    }
+
+    pub fn start(&self, alias: &str, tx: Sender<Child>) -> Result<(), io::Error> {
+        let Some(service) = self.get(alias) else {
+            return Err(io::Error::other(format!("Couldn't find {alias} service")));
+        };
+
+        let stdout = match service.stdout.as_str() {
+            "stdout" => Stdio::inherit(),
+            "null" => Stdio::null(),
+            o => Stdio::from(OpenOptions::new().create(true).write(true).open(o)?),
+        };
+
+        let stdin = match service.stdin.as_str() {
+            "stdin" => Stdio::inherit(),
+            "null" => Stdio::null(),
+            i => Stdio::from(OpenOptions::new().create(true).read(true).open(i)?),
+        };
+
+        let mut args = service.cmd.split_ascii_whitespace();
+
+        println!("ARGS: {:#?}", args.clone().collect::<Vec<_>>());
+
+        let handler = Command::new(
+            args.next()
+                .ok_or(io::Error::other("No command provided!"))?,
+        )
+        .args(args)
+        .stdout(stdout)
+        .stdin(stdin)
+        .current_dir(&service.working_dir)
+        .spawn();
+
+        println!("Spawning command {handler:#?}");
+
+        tx.send(handler?).unwrap();
+
+        Ok(())
     }
 }

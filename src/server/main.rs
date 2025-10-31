@@ -1,4 +1,5 @@
 mod config;
+mod jobs;
 mod service;
 
 use config::Config;
@@ -8,7 +9,7 @@ use std::{
     error::Error,
     io::Write,
     net::{TcpListener, TcpStream},
-    sync::{Arc, Mutex},
+    sync::{mpsc, Arc, Mutex},
     thread::{self},
 };
 use taskmeister::{dir_utils, Request, Response, ResponsePart};
@@ -33,6 +34,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.server_addr = a.parse()?;
     }
 
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        jobs::watch(rx);
+    });
+
     let services = Arc::new(Mutex::new(Services::load(config.get_includes())?));
     let listen_sock: TcpListener = TcpListener::bind(config.server_addr)?;
     let config = Arc::new(Mutex::new(config));
@@ -41,6 +48,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let sock_read: TcpStream = listen_sock.accept()?.0;
         let config = Arc::clone(&config);
         let services = Arc::clone(&services);
+        let tx = tx.clone();
 
         let handle = thread::spawn(move || -> std::io::Result<()> {
             println!("entering thread");
