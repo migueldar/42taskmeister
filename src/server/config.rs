@@ -4,21 +4,23 @@ use std::{
     fs::{self, File},
     io::Write,
     net::SocketAddrV4,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 use taskmeister::utils;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(skip)]
+    config_path: PathBuf,
     pub server_addr: SocketAddrV4,
-    pub logs: PathBuf,
-    pub include: Include,
-    pub start: Start,
+    logs: PathBuf,
+    include: Include,
+    start: Start,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Include {
-    pub path: Vec<PathBuf>,
+    pub paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -36,7 +38,9 @@ impl Config {
         let is_flag = path.is_some();
 
         // Does path contain something?
-        let config_file = path.unwrap_or(PathBuf::from(utils::expand_home_dir(CONFIG_PATH)));
+        let config_file = path.unwrap_or(PathBuf::from(utils::expand_home_dir(Path::new(
+            CONFIG_PATH,
+        ))));
 
         if !config_file.is_file() {
             // Early return if the path was inserted with the flag and does not exist
@@ -50,19 +54,26 @@ impl Config {
             }
 
             let c = Config {
+                config_path: config_file,
                 server_addr: SERVER_ADDR.parse()?,
-                logs: utils::expand_home_dir(LOGS_FILE),
-                include: Include { path: Vec::new() },
+                logs: utils::expand_home_dir(Path::new(LOGS_FILE)),
+                include: Include { paths: Vec::new() },
                 start: Start {
                     services: Vec::new(),
                 },
             };
 
-            File::create(&config_file)?.write(toml::to_string(&c)?.as_bytes())?;
-            println!("Created default configuration file in: {config_file:?}");
+            File::create(&c.config_path)?.write(toml::to_string(&c)?.as_bytes())?;
+            println!("Created default configuration file in: {:?}", c.config_path);
             return Ok(c);
         }
 
-        Ok(toml::from_str(&fs::read_to_string(config_file)?)?)
+        Ok(Config {
+            config_path: config_file.clone(),
+            ..toml::from_str(&fs::read_to_string(&config_file)?)?
+        })
+    }
+    pub fn get_includes(&self) -> &Vec<PathBuf> {
+        &self.include.paths
     }
 }
