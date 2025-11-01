@@ -6,7 +6,7 @@ use std::{
     net::SocketAddrV4,
     path::{Path, PathBuf},
 };
-use taskmeister::utils;
+use taskmeister::dir_utils;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -38,7 +38,7 @@ impl Config {
         let is_flag = path.is_some();
 
         // Does path contain something?
-        let config_file = path.unwrap_or(PathBuf::from(utils::expand_home_dir(Path::new(
+        let config_file = path.unwrap_or(PathBuf::from(dir_utils::expand_home_dir(Path::new(
             CONFIG_PATH,
         ))));
 
@@ -56,7 +56,7 @@ impl Config {
             let c = Config {
                 config_path: config_file,
                 server_addr: SERVER_ADDR.parse()?,
-                logs: utils::expand_home_dir(Path::new(LOGS_FILE)),
+                logs: dir_utils::expand_home_dir(Path::new(LOGS_FILE)),
                 include: Include { paths: Vec::new() },
                 start: Start {
                     services: Vec::new(),

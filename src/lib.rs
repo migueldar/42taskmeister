@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub mod utils;
+pub mod dir_utils;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Request {

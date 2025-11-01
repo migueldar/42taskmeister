@@ -8,7 +8,7 @@ use std::error::Error;
 use std::io::Write;
 use std::net::TcpStream;
 use std::process;
-use taskmeister::{utils, Request, Response, ResponsePart};
+use taskmeister::{dir_utils, Request, Response, ResponsePart};
 
 #[derive(Copy, Clone)]
 enum ExitCodes {
@@ -51,7 +51,7 @@ fn process_response(res: &Response, exit_code: &mut ExitCodes) {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let (cfg_path, args) = utils::parse_config_path();
+    let (cfg_path, args) = dir_utils::parse_config_path();
     let mut config = Config::load(cfg_path).unwrap();
 
     if let Some(a) = args {
