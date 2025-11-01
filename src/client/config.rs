@@ -6,7 +6,7 @@ use std::{
     net::SocketAddrV4,
     path::{Path, PathBuf},
 };
-use taskmeister::utils;
+use taskmeister::dir_utils;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -26,7 +26,7 @@ impl Config {
         let is_flag = path.is_some();
 
         // Does path contain something?
-        let config_file = path.unwrap_or(PathBuf::from(utils::expand_home_dir(Path::new(
+        let config_file = path.unwrap_or(PathBuf::from(dir_utils::expand_home_dir(Path::new(
             CONFIG_PATH,
         ))));
 
@@ -44,7 +44,7 @@ impl Config {
             let c = Config {
                 server_addr: SERVER_ADDR.parse()?,
                 prompt: PROMPT.parse()?,
-                history_file: utils::expand_home_dir(Path::new(HISTORY_FILE)),
+                history_file: dir_utils::expand_home_dir(Path::new(HISTORY_FILE)),
             };
 
             File::create(&config_file)?.write(toml::to_string(&c)?.as_bytes())?;

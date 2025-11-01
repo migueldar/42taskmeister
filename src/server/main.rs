@@ -3,7 +3,7 @@ mod service;
 
 use config::Config;
 use serde::Deserialize;
-use service::{Services, Update};
+use service::{ServiceAction, Services};
 use std::{
     error::Error,
     io::Write,
@@ -11,7 +11,7 @@ use std::{
     sync::{Arc, Mutex},
     thread::{self},
 };
-use taskmeister::{utils, Request, Response, ResponsePart};
+use taskmeister::{dir_utils, Request, Response, ResponsePart};
 
 // this is here for client testing purposes
 fn process_request(req: &Request) -> Response {
@@ -26,7 +26,7 @@ fn process_request(req: &Request) -> Response {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let (cfg_path, args) = utils::parse_config_path();
+    let (cfg_path, args) = dir_utils::parse_config_path();
     let mut config = Config::load(cfg_path)?;
 
     if let Some(a) = args {
@@ -66,12 +66,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
                 for u in up {
                     match &u {
-                        Update::Start(a) => println!("Start:\n{:#?}", srv.get(a).unwrap()),
-                        Update::Reload(a) => println!("Reload:\n{:#?}", srv.get(a).unwrap()),
-                        Update::Stop(a) => {
+                        ServiceAction::Start(a) => println!("Start:\n{:#?}", srv.get(a).unwrap()),
+                        ServiceAction::Restart(a) => {
+                            println!("Reload:\n{:#?}", srv.get(a).unwrap())
+                        }
+                        ServiceAction::Stop(a) => {
                             println!("Stop:\n{:#?}", srv.get(a).unwrap());
                             // For now just remove the service
                             srv.stop(a);
+                            srv.remove(a);
                         }
                     }
                 }
