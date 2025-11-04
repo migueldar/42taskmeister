@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
-    fmt,
-    process::Child,
+    fmt, io,
+    process::{Child, ExitStatus},
     sync::mpsc::{Receiver, Sender},
 };
 
@@ -44,11 +44,14 @@ pub struct OrchestratorRequest {
     response_channel: Sender<Result<OrchestratorResponse, OrchestratorError>>,
 }
 
-enum JobStatus {
-    Starting,
-    Started,
-    Stopping,
+#[derive(PartialEq, Clone)]
+pub enum JobStatus {
     Free,
+    Starting,
+    Running,
+    Stopping,
+    Finished(ExitStatus),
+    InternalError,
 }
 
 pub fn orchestrate(services: Services, rx: Receiver<OrchestratorRequest>) {
@@ -81,7 +84,7 @@ pub fn orchestrate(services: Services, rx: Receiver<OrchestratorRequest>) {
 
                     match job.status {
                         JobStatus::Starting => todo!(),
-                        JobStatus::Started => todo!(),
+                        JobStatus::Running => todo!(),
                         JobStatus::Stopping => todo!(),
                         JobStatus::Free => {
                             job.status = JobStatus::Starting;

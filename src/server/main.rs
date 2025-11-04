@@ -1,6 +1,7 @@
 mod config;
 mod jobs;
 mod service;
+mod watcher;
 
 use config::Config;
 use serde::Deserialize;
