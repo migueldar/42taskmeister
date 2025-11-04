@@ -17,7 +17,7 @@ pub enum ServiceAction {
     Stop(String),
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(tag = "type", content = "value")]
 enum RestartOptions {
     #[default]
@@ -26,7 +26,7 @@ enum RestartOptions {
     OnError(u8),
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 pub struct Service {
     alias: String,
     cmd: String,
@@ -122,42 +122,36 @@ impl Services {
     pub fn remove(&mut self, alias: &str) -> Option<Service> {
         self.0.remove(alias)
     }
+}
 
-    pub fn start(&self, alias: &str, tx: Sender<Child>) -> Result<(), io::Error> {
-        let Some(service) = self.get(alias) else {
-            return Err(io::Error::other(format!("Couldn't find {alias} service")));
-        };
+pub fn start(service: &Service) -> Result<(), io::Error> {
+    let stdout = match service.stdout.as_str() {
+        "stdout" => Stdio::inherit(),
+        "null" => Stdio::null(),
+        o => Stdio::from(OpenOptions::new().create(true).write(true).open(o)?),
+    };
 
-        let stdout = match service.stdout.as_str() {
-            "stdout" => Stdio::inherit(),
-            "null" => Stdio::null(),
-            o => Stdio::from(OpenOptions::new().create(true).write(true).open(o)?),
-        };
+    let stdin = match service.stdin.as_str() {
+        "stdin" => Stdio::inherit(),
+        "null" => Stdio::null(),
+        i => Stdio::from(OpenOptions::new().create(true).read(true).open(i)?),
+    };
 
-        let stdin = match service.stdin.as_str() {
-            "stdin" => Stdio::inherit(),
-            "null" => Stdio::null(),
-            i => Stdio::from(OpenOptions::new().create(true).read(true).open(i)?),
-        };
+    let mut args = service.cmd.split_ascii_whitespace();
 
-        let mut args = service.cmd.split_ascii_whitespace();
+    println!("ARGS: {:#?}", args.clone().collect::<Vec<_>>());
 
-        println!("ARGS: {:#?}", args.clone().collect::<Vec<_>>());
+    let handler = Command::new(
+        args.next()
+            .ok_or(io::Error::other("No command provided!"))?,
+    )
+    .args(args)
+    .stdout(stdout)
+    .stdin(stdin)
+    .current_dir(&service.working_dir)
+    .spawn();
 
-        let handler = Command::new(
-            args.next()
-                .ok_or(io::Error::other("No command provided!"))?,
-        )
-        .args(args)
-        .stdout(stdout)
-        .stdin(stdin)
-        .current_dir(&service.working_dir)
-        .spawn();
+    println!("Spawning command {handler:#?}");
 
-        println!("Spawning command {handler:#?}");
-
-        tx.send(handler?).unwrap();
-
-        Ok(())
-    }
+    Ok(())
 }
