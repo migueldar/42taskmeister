@@ -2,8 +2,15 @@ use std::{
     collections::HashMap,
     fmt, io,
     process::{Child, ExitStatus},
-    sync::mpsc::{Receiver, Sender},
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc, Mutex,
+    },
+    thread,
+    time::Duration,
 };
+
+use crate::watcher::{self, WatchedJob};
 
 use super::service::{Service, ServiceAction, Services};
 
@@ -56,6 +63,13 @@ pub enum JobStatus {
 
 pub fn orchestrate(services: Services, rx: Receiver<OrchestratorRequest>) {
     let jobs: HashMap<String, Job> = HashMap::new();
+    let watched_jobs: Arc<Mutex<HashMap<String, Vec<WatchedJob>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let (tx_events, rx_events) = mpsc::channel();
+
+    thread::spawn(move || {
+        watcher::watch(&mut watched_jobs, tx_events, Duration::from_millis(10));
+    });
 
     for request in rx {
         match request.req_type {
@@ -77,6 +91,7 @@ pub fn orchestrate(services: Services, rx: Receiver<OrchestratorRequest>) {
                             },
                         );
 
+                        watched_jobs.insert("cosa".to_string(), vec![]);
                         request.response_channel.send(service);
 
                         continue;

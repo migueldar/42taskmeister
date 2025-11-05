@@ -2,51 +2,43 @@ use std::{
     collections::HashMap,
     io,
     process::{Child, ExitStatus},
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };
 
 use crate::jobs::JobStatus;
 
-struct WatchedJob {
+pub struct WatchedJob {
     process: Child,
     status: JobStatus,
     previous_status: JobStatus,
 }
 
-struct Watcher {
-    watched: HashMap<String, Vec<WatchedJob>>,
+pub fn watch(
+    watched_jobs: Arc<Mutex<HashMap<String, Vec<WatchedJob>>>>,
     tx_events: Sender<JobStatus>,
-}
-
-impl Watcher {
-    pub fn new() -> (Watcher, Receiver<JobStatus>) {
-        let (tx, rx) = mpsc::channel();
-
-        let new_instance = Watcher {
-            watched: Vec::new(),
-            tx_events: tx,
-        };
-
-        (new_instance, rx)
-    }
-
-    pub fn watch(&mut self, frequency: Duration) {
-        loop {
-            for job in &mut self.watched {
+    frequency: Duration,
+) {
+    loop {
+        let mut watched = watched_jobs.lock().unwrap();
+        for (_, jobs) in watched.iter_mut() {
+            for job in jobs {
                 let new_status = exit_status_to_job_status(job.process.try_wait());
 
                 if new_status != job.previous_status {
                     job.previous_status = new_status.clone();
 
-                    if let Err(e) = self.tx_events.send(new_status) {
+                    if let Err(e) = tx_events.send(new_status) {
                         eprintln!("Watcher send event error: {e}");
                     }
                 }
             }
-            thread::sleep(frequency);
         }
+        thread::sleep(frequency);
     }
 }
 
