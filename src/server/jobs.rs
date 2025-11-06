@@ -15,8 +15,8 @@ use crate::watcher::{self, WatchedJob};
 use super::service::{Service, ServiceAction, Services};
 
 struct Job {
-    process: Option<Child>,
     status: JobStatus,
+    last_exit_status: ExitStatus, // TODO: Check the need of this
 }
 
 #[derive(Debug)]
@@ -27,14 +27,10 @@ enum JobAction {
     Inform,
 }
 
-#[derive(Debug)]
-enum RequestType {
-    ActionOnService(ServiceAction),
-    ActionOnJob(JobAction),
-}
-
 pub enum OrchestratorError {
     ServiceNotFound,
+    ServiceAlreadyStarted,
+    JobSpawnError(io::Error),
 }
 
 impl fmt::Display for OrchestratorError {
@@ -43,12 +39,10 @@ impl fmt::Display for OrchestratorError {
     }
 }
 
-type OrchestratorResponse = Service;
-
 #[derive(Debug)]
 pub struct OrchestratorRequest {
-    req_type: RequestType,
-    response_channel: Sender<Result<OrchestratorResponse, OrchestratorError>>,
+    action: ServiceAction,
+    response_channel: Sender<Result<(), OrchestratorError>>,
 }
 
 #[derive(PartialEq, Clone)]
@@ -62,56 +56,87 @@ pub enum JobStatus {
 }
 
 pub fn orchestrate(services: Services, rx: Receiver<OrchestratorRequest>) {
-    let jobs: HashMap<String, Job> = HashMap::new();
+    let mut jobs: HashMap<String, Job> = HashMap::new();
     let watched_jobs: Arc<Mutex<HashMap<String, Vec<WatchedJob>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let (tx_events, rx_events) = mpsc::channel();
+    let watched_jobs_thread = Arc::clone(&watched_jobs);
 
     thread::spawn(move || {
-        watcher::watch(&mut watched_jobs, tx_events, Duration::from_millis(10));
+        watcher::watch(watched_jobs_thread, tx_events, Duration::from_millis(10));
     });
 
+    // TODO: There is a request channel for receiving client requests, the watcher will
+    // send its events trough rx_events, must read from both channels without blocking
+    // to manage events and requests
+
+    // TODO: Extract all the above variables into a struct and create methods like
+    // jobs.create() to make the code more readable
+
     for request in rx {
-        match request.req_type {
-            RequestType::ActionOnService(service_action) => match service_action {
-                ServiceAction::Start(alias) => {
-                    let service = services
-                        .get(&alias)
-                        .cloned()
-                        .ok_or(OrchestratorError::ServiceNotFound);
+        match request.action {
+            ServiceAction::Start(alias) => {
+                let service = services.get(&alias).cloned();
 
-                    // If job does not exist, user is allowed to start the job
-                    let Some(job) = jobs.get(&alias) else {
-                        // First insert a job in Starting status
-                        jobs.insert(
-                            alias,
-                            Job {
-                                process: None,
-                                status: JobStatus::Starting,
-                            },
-                        );
+                let Some(service) = service else {
+                    request
+                        .response_channel
+                        .send(Err(OrchestratorError::ServiceNotFound));
+                    continue;
+                };
 
-                        watched_jobs.insert("cosa".to_string(), vec![]);
-                        request.response_channel.send(service);
+                // If job does not exist, start it
+                let Some(job) = jobs.get_mut(&alias) else {
+                    // First insert a job in Starting status
+                    jobs.insert(
+                        alias.clone(),
+                        Job {
+                            status: JobStatus::Starting,
+                            last_exit_status: ExitStatus::default(),
+                        },
+                    );
 
-                        continue;
+                    // Spawn a job handler from service and return error if any
+                    let handler = match service.start() {
+                        Ok(handler) => handler,
+                        Err(err) => {
+                            request
+                                .response_channel
+                                .send(Err(OrchestratorError::JobSpawnError(err)));
+                            continue;
+                        }
                     };
 
-                    match job.status {
-                        JobStatus::Starting => todo!(),
-                        JobStatus::Running => todo!(),
-                        JobStatus::Stopping => todo!(),
-                        JobStatus::Free => {
-                            job.status = JobStatus::Starting;
-                            request.response_channel.send(service);
-                        }
+                    // Add handler to the watched jobs
+                    let mut watched = watched_jobs.lock().unwrap();
+                    watched.insert(
+                        alias,
+                        vec![WatchedJob {
+                            process: handler,
+                            status: JobStatus::Starting,
+                            previous_status: JobStatus::Starting,
+                        }],
+                    );
+
+                    request.response_channel.send(Ok(()));
+
+                    continue;
+                };
+
+                let response = match job.status {
+                    JobStatus::Starting | JobStatus::Running | JobStatus::Stopping => {
+                        Err(OrchestratorError::ServiceAlreadyStarted)
                     }
-                }
-                ServiceAction::Restart(alias) => todo!(),
-                ServiceAction::Stop(alias) => todo!(),
-            },
-            RequestType::ActionOnJob(job_action) => todo!(),
-            RequestType::Result => todo!(),
+                    JobStatus::Finished(exit_status) => {
+                        job.last_exit_status = exit_status;
+                        Ok(())
+                    }
+                    JobStatus::Free => todo!(),
+                    JobStatus::InternalError => todo!(),
+                };
+            }
+            ServiceAction::Restart(alias) => todo!(),
+            ServiceAction::Stop(alias) => todo!(),
         }
     }
 }

@@ -3,7 +3,7 @@ use std::{
     io,
     process::{Child, ExitStatus},
     sync::{
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, Sender},
         Arc, Mutex,
     },
     thread,
@@ -12,27 +12,35 @@ use std::{
 
 use crate::jobs::JobStatus;
 
-pub struct WatchedJob {
-    process: Child,
+pub struct JobEvent {
+    alias: String,
     status: JobStatus,
-    previous_status: JobStatus,
+}
+
+pub struct WatchedJob {
+    pub process: Child,
+    pub status: JobStatus,
+    pub previous_status: JobStatus,
 }
 
 pub fn watch(
     watched_jobs: Arc<Mutex<HashMap<String, Vec<WatchedJob>>>>,
-    tx_events: Sender<JobStatus>,
+    tx_events: Sender<JobEvent>,
     frequency: Duration,
 ) {
     loop {
         let mut watched = watched_jobs.lock().unwrap();
-        for (_, jobs) in watched.iter_mut() {
+        for (alias, jobs) in watched.iter_mut() {
             for job in jobs {
                 let new_status = exit_status_to_job_status(job.process.try_wait());
 
                 if new_status != job.previous_status {
                     job.previous_status = new_status.clone();
 
-                    if let Err(e) = tx_events.send(new_status) {
+                    if let Err(e) = tx_events.send(JobEvent {
+                        alias: alias.clone(),
+                        status: new_status,
+                    }) {
                         eprintln!("Watcher send event error: {e}");
                     }
                 }

@@ -124,34 +124,32 @@ impl Services {
     }
 }
 
-pub fn start(service: &Service) -> Result<(), io::Error> {
-    let stdout = match service.stdout.as_str() {
-        "stdout" => Stdio::inherit(),
-        "null" => Stdio::null(),
-        o => Stdio::from(OpenOptions::new().create(true).write(true).open(o)?),
-    };
+impl Service {
+    pub fn start(&self) -> Result<Child, io::Error> {
+        let stdout = match self.stdout.as_str() {
+            "stdout" => Stdio::inherit(),
+            "null" => Stdio::null(),
+            o => Stdio::from(OpenOptions::new().create(true).write(true).open(o)?),
+        };
 
-    let stdin = match service.stdin.as_str() {
-        "stdin" => Stdio::inherit(),
-        "null" => Stdio::null(),
-        i => Stdio::from(OpenOptions::new().create(true).read(true).open(i)?),
-    };
+        let stdin = match self.stdin.as_str() {
+            "stdin" => Stdio::inherit(),
+            "null" => Stdio::null(),
+            i => Stdio::from(OpenOptions::new().create(true).read(true).open(i)?),
+        };
 
-    let mut args = service.cmd.split_ascii_whitespace();
+        let mut args = self.cmd.split_ascii_whitespace();
 
-    println!("ARGS: {:#?}", args.clone().collect::<Vec<_>>());
+        println!("ARGS: {:#?}", args.clone().collect::<Vec<_>>());
 
-    let handler = Command::new(
-        args.next()
-            .ok_or(io::Error::other("No command provided!"))?,
-    )
-    .args(args)
-    .stdout(stdout)
-    .stdin(stdin)
-    .current_dir(&service.working_dir)
-    .spawn();
-
-    println!("Spawning command {handler:#?}");
-
-    Ok(())
+        Command::new(
+            args.next()
+                .ok_or(io::Error::other("No command provided!"))?,
+        )
+        .args(args)
+        .stdout(stdout)
+        .stdin(stdin)
+        .current_dir(&self.working_dir)
+        .spawn()
+    }
 }
