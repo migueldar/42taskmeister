@@ -58,99 +58,115 @@ pub enum JobStatus {
 }
 
 pub struct Orchestrator {
+    services: Services,
     jobs: HashMap<String, Job>,
     watched: Arc<Mutex<HashMap<String, Vec<WatchedJob>>>>,
     events_channel: (Sender<JobEvent>, Receiver<JobEvent>),
+    requests: Receiver<OrchestratorRequest>,
 }
 
-pub fn orchestrate(services: Services, rx: Receiver<OrchestratorRequest>) {
-    let mut jobs: HashMap<String, Job> = HashMap::new();
-    let watched_jobs: Arc<Mutex<HashMap<String, Vec<WatchedJob>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
-    let (tx_events, rx_events) = mpsc::channel();
-    let watched_jobs_thread = Arc::clone(&watched_jobs);
+impl Orchestrator {
+    pub fn new(services: Services) -> (Orchestrator, Sender<OrchestratorRequest>) {
+        let (general_tx, general_rx) = mpsc::channel();
 
-    thread::spawn(move || {
-        watcher::watch(watched_jobs_thread, tx_events, Duration::from_millis(10));
-    });
+        (
+            Orchestrator {
+                services: services,
+                jobs: HashMap::new(),
+                watched: Arc::new(Mutex::new(HashMap::new())),
+                events_channel: mpsc::channel(),
+                requests: general_rx,
+            },
+            general_tx,
+        )
+    }
 
-    // TODO: There is a request channel for receiving client requests, the watcher will
-    // send its events trough rx_events, must read from both channels without blocking
-    // to manage events and requests
+    pub fn orchestrate(mut self) {
+        let (tx_events, rx_events) = mpsc::channel();
+        let watched_jobs_thread = Arc::clone(&self.watched);
 
-    // TODO: Extract all the above variables into a struct and create methods like
-    // jobs.create() to make the code more readable
+        thread::spawn(move || {
+            watcher::watch(watched_jobs_thread, tx_events, Duration::from_millis(10));
+        });
 
-    for request in rx {
-        match request.action {
-            ServiceAction::Start(alias) => {
-                let service = services.get(&alias).cloned();
+        // TODO: There is a request channel for receiving client requests, the watcher will
+        // send its events trough rx_events, must read from both channels without blocking
+        // to manage events and requests
 
-                let Some(service) = service else {
-                    request
-                        .response_channel
-                        .send(Err(OrchestratorError::ServiceNotFound));
-                    continue;
-                };
+        // TODO: Extract all the above variables into a struct and create methods like
+        // jobs.create() to make the code more readable
 
-                // If job does not exist, start it
-                let Some(job) = jobs.get_mut(&alias) else {
-                    // First insert a job in Starting status
-                    jobs.insert(
-                        alias.clone(),
-                        Job {
-                            status: JobStatus::Starting,
-                            retries: service.calc_timeout(),
-                            next_expected_status: Some(JobStatus::Running),
-                            last_exit_status: ExitStatus::default(),
-                        },
-                    );
+        for request in self.requests {
+            match request.action {
+                ServiceAction::Start(alias) => {
+                    let service = self.services.get(&alias).cloned();
 
-                    // Spawn a job handler from service and return error if any
-                    let handler = match service.start() {
-                        Ok(handler) => handler,
-                        Err(err) => {
-                            request
-                                .response_channel
-                                .send(Err(OrchestratorError::JobSpawnError(err)));
-                            continue;
-                        }
+                    let Some(service) = service else {
+                        request
+                            .response_channel
+                            .send(Err(OrchestratorError::ServiceNotFound));
+                        continue;
                     };
 
-                    // Add handler to the watched jobs
-                    let mut watched = watched_jobs.lock().unwrap();
-                    watched.insert(
-                        alias,
-                        vec![WatchedJob {
-                            process: handler,
-                            status: JobStatus::Starting,
-                            previous_status: JobStatus::Starting,
-                            timeout: WatchedTimeout {
-                                created_at: Instant::now(),
-                                time: Duration::from_secs(service.timeout),
+                    // If job does not exist, start it
+                    let Some(job) = self.jobs.get_mut(&alias) else {
+                        // First insert a job in Starting status
+                        self.jobs.insert(
+                            alias.clone(),
+                            Job {
+                                status: JobStatus::Starting,
+                                retries: service.calc_timeout(),
+                                next_expected_status: Some(JobStatus::Running),
+                                last_exit_status: ExitStatus::default(),
                             },
-                        }],
-                    );
+                        );
 
-                    request.response_channel.send(Ok(()));
+                        // Spawn a job handler from service and return error if any
+                        let handler = match service.start() {
+                            Ok(handler) => handler,
+                            Err(err) => {
+                                request
+                                    .response_channel
+                                    .send(Err(OrchestratorError::JobSpawnError(err)));
+                                continue;
+                            }
+                        };
 
-                    continue;
-                };
+                        // Add handler to the watched jobs
+                        let mut watched = self.watched.lock().unwrap();
+                        watched.insert(
+                            alias,
+                            vec![WatchedJob {
+                                process: handler,
+                                status: JobStatus::Starting,
+                                previous_status: JobStatus::Starting,
+                                timeout: WatchedTimeout {
+                                    created_at: Instant::now(),
+                                    time: Duration::from_secs(service.timeout),
+                                },
+                            }],
+                        );
 
-                let response = match job.status {
-                    JobStatus::Starting | JobStatus::Running | JobStatus::Stopping => {
-                        Err(OrchestratorError::ServiceAlreadyStarted)
-                    }
-                    JobStatus::Finished(exit_status) => {
-                        job.last_exit_status = exit_status;
-                        Ok(())
-                    }
-                    JobStatus::Free => todo!(),
-                    JobStatus::TimedOut => todo!(),
-                };
+                        request.response_channel.send(Ok(()));
+
+                        continue;
+                    };
+
+                    let response = match job.status {
+                        JobStatus::Starting | JobStatus::Running | JobStatus::Stopping => {
+                            Err(OrchestratorError::ServiceAlreadyStarted)
+                        }
+                        JobStatus::Finished(exit_status) => {
+                            job.last_exit_status = exit_status;
+                            Ok(())
+                        }
+                        JobStatus::Free => todo!(),
+                        JobStatus::TimedOut => todo!(),
+                    };
+                }
+                ServiceAction::Restart(alias) => todo!(),
+                ServiceAction::Stop(alias) => todo!(),
             }
-            ServiceAction::Restart(alias) => todo!(),
-            ServiceAction::Stop(alias) => todo!(),
         }
     }
 }
