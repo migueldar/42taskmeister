@@ -7,15 +7,17 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use crate::watcher::{self, WatchedJob};
+use crate::watcher::{self, JobEvent, WatchedJob, WatchedTimeout};
 
 use super::service::{Service, ServiceAction, Services};
 
 struct Job {
     status: JobStatus,
+    retries: Option<u8>,
+    next_expected_status: Option<JobStatus>,
     last_exit_status: ExitStatus, // TODO: Check the need of this
 }
 
@@ -52,7 +54,13 @@ pub enum JobStatus {
     Running,
     Stopping,
     Finished(ExitStatus),
-    InternalError,
+    TimedOut,
+}
+
+pub struct Orchestrator {
+    jobs: HashMap<String, Job>,
+    watched: Arc<Mutex<HashMap<String, Vec<WatchedJob>>>>,
+    events_channel: (Sender<JobEvent>, Receiver<JobEvent>),
 }
 
 pub fn orchestrate(services: Services, rx: Receiver<OrchestratorRequest>) {
@@ -92,6 +100,8 @@ pub fn orchestrate(services: Services, rx: Receiver<OrchestratorRequest>) {
                         alias.clone(),
                         Job {
                             status: JobStatus::Starting,
+                            retries: service.calc_timeout(),
+                            next_expected_status: Some(JobStatus::Running),
                             last_exit_status: ExitStatus::default(),
                         },
                     );
@@ -115,6 +125,10 @@ pub fn orchestrate(services: Services, rx: Receiver<OrchestratorRequest>) {
                             process: handler,
                             status: JobStatus::Starting,
                             previous_status: JobStatus::Starting,
+                            timeout: WatchedTimeout {
+                                created_at: Instant::now(),
+                                time: Duration::from_secs(service.timeout),
+                            },
                         }],
                     );
 
@@ -132,7 +146,7 @@ pub fn orchestrate(services: Services, rx: Receiver<OrchestratorRequest>) {
                         Ok(())
                     }
                     JobStatus::Free => todo!(),
-                    JobStatus::InternalError => todo!(),
+                    JobStatus::TimedOut => todo!(),
                 };
             }
             ServiceAction::Restart(alias) => todo!(),

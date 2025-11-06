@@ -31,8 +31,8 @@ pub struct Service {
     alias: String,
     cmd: String,
     clone: u16,
-    restart: RestartOptions,
-    timeout: u32,
+    pub restart: RestartOptions,
+    pub timeout: u64,
     stop_signal: u32,
     stop_wait: u32,
     stdout: String,
@@ -151,5 +151,12 @@ impl Service {
         .stdin(stdin)
         .current_dir(&self.working_dir)
         .spawn()
+    }
+
+    pub fn calc_timeout(&self) -> Option<u8> {
+        match self.restart {
+            RestartOptions::Never => None,
+            RestartOptions::Always(timeout) | RestartOptions::OnError(timeout) => Some(timeout),
+        }
     }
 }
