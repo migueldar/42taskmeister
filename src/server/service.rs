@@ -153,10 +153,10 @@ impl Service {
         .spawn()
     }
 
-    pub fn calc_timeout(&self) -> Option<u8> {
+    pub fn calc_retries(&self) -> Option<u8> {
         match self.restart {
             RestartOptions::Never => None,
-            RestartOptions::Always(timeout) | RestartOptions::OnError(timeout) => Some(timeout),
+            RestartOptions::Always(retries) | RestartOptions::OnError(retries) => Some(retries),
         }
     }
 }

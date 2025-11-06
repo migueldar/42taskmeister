@@ -38,7 +38,7 @@ pub struct WatchedJob {
 pub fn watch(
     watched_jobs: Arc<Mutex<HashMap<String, Vec<WatchedJob>>>>,
     tx_events: Sender<JobEvent>,
-    frequency: Duration,
+    period: Duration,
 ) {
     loop {
         let mut watched = watched_jobs.lock().unwrap();
@@ -68,7 +68,7 @@ pub fn watch(
                 }
             }
         }
-        thread::sleep(frequency);
+        thread::sleep(period);
     }
 }
 

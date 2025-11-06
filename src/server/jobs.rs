@@ -81,6 +81,44 @@ impl Orchestrator {
         )
     }
 
+    fn start_job(&mut self, alias: String) -> Result<&mut Job, OrchestratorError> {
+        let service = self
+            .services
+            .get(&alias)
+            .cloned()
+            .ok_or(OrchestratorError::ServiceNotFound)?;
+
+        // If job does not exist, start it
+        let job = self.jobs.entry(alias.clone()).or_insert(Job {
+            status: JobStatus::Starting,
+            retries: service.calc_retries(),
+            next_expected_status: Some(JobStatus::Running),
+            last_exit_status: ExitStatus::default(),
+        });
+
+        // Spawn a job handler from service and return error if any
+        let handler = service
+            .start()
+            .map_err(|e| OrchestratorError::JobSpawnError(e))?;
+
+        // Add handler to the watched jobs
+        let mut watched = self.watched.lock().unwrap();
+        watched.insert(
+            alias,
+            vec![WatchedJob {
+                process: handler,
+                status: JobStatus::Starting,
+                previous_status: JobStatus::Starting,
+                timeout: WatchedTimeout {
+                    created_at: Instant::now(),
+                    time: Duration::from_secs(service.timeout),
+                },
+            }],
+        );
+
+        Ok(job)
+    }
+
     pub fn orchestrate(mut self) {
         let (tx_events, rx_events) = mpsc::channel();
         let watched_jobs_thread = Arc::clone(&self.watched);
@@ -96,60 +134,15 @@ impl Orchestrator {
         // TODO: Extract all the above variables into a struct and create methods like
         // jobs.create() to make the code more readable
 
-        for request in self.requests {
+        while let Some(request) = self.requests.iter().next() {
             match request.action {
                 ServiceAction::Start(alias) => {
-                    let service = self.services.get(&alias).cloned();
-
-                    let Some(service) = service else {
-                        request
-                            .response_channel
-                            .send(Err(OrchestratorError::ServiceNotFound));
-                        continue;
-                    };
-
-                    // If job does not exist, start it
-                    let Some(job) = self.jobs.get_mut(&alias) else {
-                        // First insert a job in Starting status
-                        self.jobs.insert(
-                            alias.clone(),
-                            Job {
-                                status: JobStatus::Starting,
-                                retries: service.calc_timeout(),
-                                next_expected_status: Some(JobStatus::Running),
-                                last_exit_status: ExitStatus::default(),
-                            },
-                        );
-
-                        // Spawn a job handler from service and return error if any
-                        let handler = match service.start() {
-                            Ok(handler) => handler,
-                            Err(err) => {
-                                request
-                                    .response_channel
-                                    .send(Err(OrchestratorError::JobSpawnError(err)));
-                                continue;
-                            }
-                        };
-
-                        // Add handler to the watched jobs
-                        let mut watched = self.watched.lock().unwrap();
-                        watched.insert(
-                            alias,
-                            vec![WatchedJob {
-                                process: handler,
-                                status: JobStatus::Starting,
-                                previous_status: JobStatus::Starting,
-                                timeout: WatchedTimeout {
-                                    created_at: Instant::now(),
-                                    time: Duration::from_secs(service.timeout),
-                                },
-                            }],
-                        );
-
-                        request.response_channel.send(Ok(()));
-
-                        continue;
+                    let job = match self.start_job(alias) {
+                        Ok(job) => job,
+                        Err(err) => {
+                            request.response_channel.send(Err(err));
+                            continue;
+                        }
                     };
 
                     let response = match job.status {
@@ -157,6 +150,8 @@ impl Orchestrator {
                             Err(OrchestratorError::ServiceAlreadyStarted)
                         }
                         JobStatus::Finished(exit_status) => {
+                            // At this point event loop will have moved the job
+                            // out from the watcher
                             job.last_exit_status = exit_status;
                             Ok(())
                         }
