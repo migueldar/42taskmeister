@@ -2,10 +2,7 @@ use std::{
     collections::HashMap,
     io,
     process::{Child, ExitStatus},
-    sync::{
-        mpsc::{self, Sender},
-        Arc, Mutex,
-    },
+    sync::{mpsc::Sender, Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -17,6 +14,7 @@ pub struct JobEvent {
     status: JobStatus,
 }
 
+#[derive(Debug)]
 pub struct WatchedTimeout {
     pub created_at: Instant,
     pub time: Duration,
@@ -28,6 +26,7 @@ impl WatchedTimeout {
     }
 }
 
+#[derive(Debug)]
 pub struct WatchedJob {
     pub process: Child,
     pub timeout: WatchedTimeout,

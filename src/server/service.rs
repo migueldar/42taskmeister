@@ -5,7 +5,6 @@ use std::{
     io,
     path::PathBuf,
     process::{Child, Command, Stdio},
-    sync::mpsc::Sender,
 };
 use taskmeister::dir_utils;
 
@@ -19,7 +18,7 @@ pub enum ServiceAction {
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(tag = "type", content = "value")]
-enum RestartOptions {
+pub enum RestartOptions {
     #[default]
     Never,
     Always(u8),
