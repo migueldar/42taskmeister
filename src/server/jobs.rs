@@ -33,6 +33,7 @@ enum JobAction {
 pub enum OrchestratorError {
     ServiceNotFound,
     ServiceAlreadyStarted,
+    JobNotFound,
     JobSpawnError(io::Error),
 }
 
@@ -126,19 +127,12 @@ impl Orchestrator {
         ))
     }
 
-    fn start_request(
-        &mut self,
-        alias: String,
-        response_channel: Sender<Result<(), OrchestratorError>>,
-    ) {
+    fn start_request(&mut self, alias: String) -> Result<(), OrchestratorError> {
+        // Get or create a new job
         let job = match self.create_job(alias.clone()) {
             Ok(job) => job,
             Err(err) => {
-                response_channel
-                    .send(Err(err))
-                    .inspect_err(|err| eprintln!("Error: Sendig response to client: {err:?}"))
-                    .ok();
-                return;
+                return Err(err);
             }
         };
 
@@ -171,10 +165,48 @@ impl Orchestrator {
             };
         };
 
-        response_channel
-            .send(response)
-            .inspect_err(|err| eprintln!("Error: Sendig response to client: {err:?}"))
-            .ok();
+        response
+    }
+
+    fn stop_request(&mut self, alias: String) -> Result<(), OrchestratorError> {
+        // Get the job
+        let job = self
+            .jobs
+            .get_mut(&alias)
+            .ok_or(OrchestratorError::JobNotFound)?;
+
+        // TODO: COntinue here, decide where to use nix crate, or libc to send specific signal to stop a process
+
+        // Only starting and Running are considered valid states to stop a job
+        let mut response = match job.status {
+            JobStatus::Starting | JobStatus::Running => Ok(()),
+            JobStatus::Stopping | JobStatus::TimedOut => {
+                Err(OrchestratorError::ServiceAlreadyStarted)
+            }
+            JobStatus::Finished(exit_status) => {
+                // At this point event loop will have moved the job
+                // out from the watcher
+                job.last_exit_status = exit_status;
+                Ok(())
+            }
+            JobStatus::Free | JobStatus::Created => Ok(()),
+        };
+
+        // If response is positive, start the job
+        if let Ok(_) = response {
+            response = match self.start_job(alias) {
+                Ok(res) => {
+                    if let Some(old_watched_jobs) = res {
+                        // TODO: Do something with old jobs in this case?
+                        eprintln!("Warning: Started new jobs but old where not cleaned up from the watcher: {old_watched_jobs:?}");
+                    }
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            };
+        };
+
+        response
     }
 
     pub fn orchestrate(mut self) {
@@ -197,11 +229,17 @@ impl Orchestrator {
         //TODO: Add a request to update services, maybe service should contain config
 
         while let Some(request) = self.requests.iter().next() {
-            match request.action {
-                ServiceAction::Start(alias) => self.start_request(alias, request.response_channel),
+            let result = match request.action {
+                ServiceAction::Start(alias) => self.start_request(alias),
                 ServiceAction::Restart(_) => todo!(),
                 ServiceAction::Stop(_) => todo!(),
-            }
+            };
+
+            request
+                .response_channel
+                .send(result)
+                .inspect_err(|err| eprintln!("Error: Sendig response to client: {err:?}"))
+                .ok();
         }
     }
 }
