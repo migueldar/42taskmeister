@@ -44,6 +44,9 @@ pub fn watch(
             for job in jobs {
                 let new_status = exit_status_to_job_status(job.process.try_wait());
                 if new_status != job.previous_status {
+                    // println!("NEW STATUS: {new_status:#?}");
+                    // println!("OLD STATUS: {:#?}", job.previous_status);
+
                     job.previous_status = new_status.clone();
 
                     if let Err(e) = tx_events.send(JobEvent {
