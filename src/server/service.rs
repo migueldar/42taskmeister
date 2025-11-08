@@ -36,6 +36,7 @@ pub struct Service {
     stop_wait: u32,
     stdout: String,
     stdin: String,
+    stderr: String,
     variables: Vec<(String, String)>,
     working_dir: PathBuf,
     umask: u16,
@@ -137,6 +138,12 @@ impl Service {
             i => Stdio::from(OpenOptions::new().create(true).read(true).open(i)?),
         };
 
+        let stderr = match self.stderr.as_str() {
+            "stderr" => Stdio::inherit(),
+            "null" => Stdio::null(),
+            o => Stdio::from(OpenOptions::new().create(true).write(true).open(o)?),
+        };
+
         let mut args = self.cmd.split_ascii_whitespace();
 
         println!("ARGS: {:#?}", args.clone().collect::<Vec<_>>());
@@ -148,6 +155,7 @@ impl Service {
         .args(args)
         .stdout(stdout)
         .stdin(stdin)
+        .stderr(stderr)
         .current_dir(&self.working_dir)
         .spawn()
     }

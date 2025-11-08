@@ -40,8 +40,7 @@ pub fn watch(
     period: Duration,
 ) {
     loop {
-        let mut watched = watched_jobs.lock().unwrap();
-        for (alias, jobs) in watched.iter_mut() {
+        for (alias, jobs) in watched_jobs.lock().unwrap().iter_mut() {
             for job in jobs {
                 let new_status = exit_status_to_job_status(job.process.try_wait());
                 if new_status != job.previous_status {

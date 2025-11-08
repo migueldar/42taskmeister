@@ -69,6 +69,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
                 for resp in cli_rx {
                     println!("Received Orchestrator response:\n{resp:?}");
+                    break;
                 }
             }
         });
