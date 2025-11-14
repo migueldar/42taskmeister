@@ -10,6 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use libc;
+
 use crate::watcher::{self, JobEvent, WatchedJob, WatchedTimeout};
 
 use super::service::{ServiceAction, Services};
@@ -19,6 +21,20 @@ struct Job {
     retries: Option<u8>,
     next_expected_status: Option<JobStatus>,
     last_exit_status: ExitStatus, // TODO: Check the need of this
+}
+
+enum OsSignal {
+    SigTerm,
+    SigKill,
+}
+
+impl OsSignal {
+    pub fn value(&self) -> i32 {
+        match self {
+            OsSignal::SigTerm => libc::SIGTERM,
+            OsSignal::SigKill => libc::SIGKILL,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -241,5 +257,13 @@ impl Orchestrator {
                 .inspect_err(|err| eprintln!("Error: Sendig response to client: {err:?}"))
                 .ok();
         }
+    }
+}
+
+fn kill(pid: i32, signal: OsSignal) -> io::Result<()> {
+    if unsafe { libc::kill(pid, signal.value()) } == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }
