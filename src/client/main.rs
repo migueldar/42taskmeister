@@ -1,70 +1,68 @@
+mod argument_parser;
 mod config;
+mod connection;
 
+use argument_parser::ParsedArgumets;
 use config::Config;
-use rustyline::error::ReadlineError;
+use connection::Connection;
 use rustyline::DefaultEditor;
-use serde::Deserialize;
+use rustyline::error::ReadlineError;
 use std::error::Error;
-use std::io::Write;
-use std::net::TcpStream;
+use std::fs::File;
 use std::process;
-use taskmeister::{dir_utils, Request, Response, ResponsePart};
+
+const HELPMESSAGE: &str = r#"usage: cargo run --bin client [OPTIONS...] [server_addr]
+
+OPTIONS
+    -f FILE      read config from FILE, if not specified config will be read from ~/.config/taskmeister/client.toml
+    -c COMMAND   executes COMMAND 
+    -h           displays this message
+"#;
 
 #[derive(Copy, Clone)]
-enum ExitCodes {
+pub enum ExitCode {
     OK = 0,
     SIGINT = 1,
     COMMANDERROR = 2,
     OTHERERROR = 3,
 }
 
-fn line_to_request(line: &str) -> Request {
-    let mut splitted_line = line.split_whitespace();
-    let mut ret = Request {
-        command: splitted_line.next().unwrap().to_string(),
-        flags: vec![],
-        args: vec![],
-    };
-
-    for f in splitted_line {
-        if f.starts_with("-") {
-            ret.flags.push(f.to_string());
-        } else {
-            ret.args.push(f.to_string());
-        }
-    }
-    ret
-}
-
 fn str_is_spaces(line: &str) -> bool {
     !line.contains(|c: char| !c.is_whitespace())
 }
 
-fn process_response(res: &Response, exit_code: &mut ExitCodes) {
-    *exit_code = ExitCodes::OK;
-    for r in res.iter() {
-        println!("{}", r);
-        if !matches!(exit_code, ExitCodes::COMMANDERROR) && matches!(r, ResponsePart::Error(_)) {
-            *exit_code = ExitCodes::COMMANDERROR;
-        }
-    }
+fn print_help() {
+    print!("{}", HELPMESSAGE);
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let (cfg_path, args) = dir_utils::parse_config_path();
-    let mut config = Config::load(cfg_path).unwrap();
+    let parsed_args = match ParsedArgumets::new() {
+        Ok(p) => p,
+        Err(_) => {
+            print_help();
+            process::exit(1);
+        }
+    };
 
-    if let Some(a) = args {
-        config.server_addr = a.parse()?;
+    if parsed_args.help {
+        print_help();
+        return Ok(());
     }
 
-    let mut sock_write: TcpStream = TcpStream::connect(config.server_addr)?;
-    let sock_read: TcpStream = sock_write.try_clone()?;
-    let mut res = serde_json::Deserializer::from_reader(&sock_read);
-    let mut exit_code = ExitCodes::OK;
+    let config = Config::load(parsed_args.config_file, parsed_args.server_addr)?;
+    let mut connection = Connection::new(config.server_addr)?;
+    let mut exit_code = ExitCode::OK;
 
-    let mut rl = DefaultEditor::new().unwrap();
-    // rl.load_history(&config.history_file).unwrap();
+    if parsed_args.command.is_some() {
+        connection.write(&parsed_args.command.unwrap(), &mut exit_code)?;
+        process::exit(exit_code as i32);
+    }
+
+    let mut rl = DefaultEditor::new()?;
+    if !config.history_file.exists() {
+        File::create(&config.history_file)?;
+    }
+    rl.load_history(&config.history_file)?;
 
     loop {
         let readline = rl.readline(&config.prompt);
@@ -73,30 +71,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if str_is_spaces(&line) {
                     continue;
                 }
-                rl.add_history_entry(line.as_str()).unwrap();
-
-                let req = line_to_request(&line);
-                sock_write
-                    .write(serde_json::to_string(&req)?.as_bytes())
-                    .unwrap();
-                let res: Response = Response::deserialize(&mut res)?;
-                process_response(&res, &mut exit_code);
+                rl.add_history_entry(line.as_str())?;
+                if let Err(err) = connection.write(&line, &mut exit_code) {
+                    println!("Error: {:?}", err);
+                    break;
+                }
             }
             Err(ReadlineError::Eof) => {
                 break;
             }
             Err(ReadlineError::Interrupted) => {
-                exit_code = ExitCodes::SIGINT;
+                exit_code = ExitCode::SIGINT;
                 break;
             }
             Err(err) => {
                 println!("Error: {:?}", err);
-                exit_code = ExitCodes::OTHERERROR;
+                exit_code = ExitCode::OTHERERROR;
                 break;
             }
         }
     }
 
-    // rl.save_history(&config.history_file).unwrap();
+    rl.save_history(&config.history_file)?;
     process::exit(exit_code as i32);
 }
