@@ -78,27 +78,32 @@ pub enum JobStatus {
     TimedOut,
 }
 
+pub enum OrchestratorMsg {
+    Request(OrchestratorRequest),
+    Event(JobEvent),
+}
+
 pub struct Orchestrator {
     services: Services,
     jobs: HashMap<String, Job>,
     watched: Arc<Mutex<HashMap<String, Vec<WatchedJob>>>>,
-    events_channel: (Sender<JobEvent>, Receiver<JobEvent>),
-    requests: Receiver<OrchestratorRequest>,
+    messages_tx: Sender<OrchestratorMsg>,
+    messages_rx: Receiver<OrchestratorMsg>,
 }
 
 impl Orchestrator {
-    pub fn new(services: Services) -> (Orchestrator, Sender<OrchestratorRequest>) {
-        let (general_tx, general_rx) = mpsc::channel();
+    pub fn new(services: Services) -> (Orchestrator, Sender<OrchestratorMsg>) {
+        let (tx, rx) = mpsc::channel();
 
         (
             Orchestrator {
                 services: services,
                 jobs: HashMap::new(),
                 watched: Arc::new(Mutex::new(HashMap::new())),
-                events_channel: mpsc::channel(),
-                requests: general_rx,
+                messages_tx: tx.clone(),
+                messages_rx: rx,
             },
-            general_tx,
+            tx,
         )
     }
 
@@ -254,8 +259,8 @@ impl Orchestrator {
     }
 
     pub fn orchestrate(mut self) {
-        let (tx_events, _) = mpsc::channel();
         let watched_jobs_thread = Arc::clone(&self.watched);
+        let tx_events = self.messages_tx.clone();
 
         thread::spawn(move || {
             watcher::watch(watched_jobs_thread, tx_events, Duration::from_millis(10));
@@ -266,29 +271,27 @@ impl Orchestrator {
         // protection since watcher also access the structure (in fact is the one
         // that consumes most of the lock time)
 
-        // TODO: There is a request channel for receiving client requests, the watcher will
-        // send its events trough rx_events, must read from both channels without blocking
-        // to manage events and requests
-
-        // TODO: Extract all the above variables into a struct and create methods like
-        // jobs.create() to make the code more readable
-
         // TODO: Put events and requests all in the one channel
 
-        //TODO: Add a request to update services, maybe service should contain config
+        // TODO: Add a request to update services, maybe service should contain config
 
-        while let Some(request) = self.requests.iter().next() {
-            let result = match request.action {
-                ServiceAction::Start(alias) => self.start_request(alias),
-                ServiceAction::Restart(_) => todo!(),
-                ServiceAction::Stop(alias) => self.stop_request(alias),
-            };
+        while let Some(message) = self.messages_rx.iter().next() {
+            match message {
+                OrchestratorMsg::Request(request) => {
+                    let result = match request.action {
+                        ServiceAction::Start(alias) => self.start_request(alias),
+                        ServiceAction::Restart(_) => todo!(),
+                        ServiceAction::Stop(alias) => self.stop_request(alias),
+                    };
 
-            request
-                .response_channel
-                .send(result)
-                .inspect_err(|err| eprintln!("Error: Sendig response to client: {err:?}"))
-                .ok();
+                    request
+                        .response_channel
+                        .send(result)
+                        .inspect_err(|err| eprintln!("Error: Sendig response to client: {err:?}"))
+                        .ok();
+                }
+                OrchestratorMsg::Event(event) => todo!(),
+            }
         }
     }
 }

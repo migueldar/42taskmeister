@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::jobs::JobStatus;
+use crate::jobs::{JobStatus, OrchestratorMsg};
 
 pub struct JobEvent {
     alias: String,
@@ -36,7 +36,7 @@ pub struct WatchedJob {
 
 pub fn watch(
     watched_jobs: Arc<Mutex<HashMap<String, Vec<WatchedJob>>>>,
-    tx_events: Sender<JobEvent>,
+    tx_events: Sender<OrchestratorMsg>,
     period: Duration,
 ) {
     loop {
@@ -49,10 +49,10 @@ pub fn watch(
 
                     job.previous_status = new_status.clone();
 
-                    if let Err(e) = tx_events.send(JobEvent {
+                    if let Err(e) = tx_events.send(OrchestratorMsg::Event(JobEvent {
                         alias: alias.clone(),
                         status: new_status,
-                    }) {
+                    })) {
                         eprintln!("Watcher send event error: {e}");
                     }
 
@@ -60,10 +60,10 @@ pub fn watch(
                 }
 
                 if job.timeout.has_timed_out() {
-                    if let Err(e) = tx_events.send(JobEvent {
+                    if let Err(e) = tx_events.send(OrchestratorMsg::Event(JobEvent {
                         alias: alias.clone(),
                         status: JobStatus::TimedOut,
-                    }) {
+                    })) {
                         eprintln!("Watcher send event error: {e}");
                     }
                 }

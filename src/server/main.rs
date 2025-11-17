@@ -60,10 +60,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
                 let (cli_tx, cli_rx) = mpsc::channel();
                 requests_tx
-                    .send(OrchestratorRequest {
+                    .send(jobs::OrchestratorMsg::Request(OrchestratorRequest {
                         action: service::ServiceAction::Start("ls1".to_string()),
                         response_channel: cli_tx,
-                    })
+                    }))
                     .inspect_err(|err| eprintln!("Error sending request to orchestrator! {err:?}"))
                     .ok();
 
