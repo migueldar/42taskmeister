@@ -76,7 +76,7 @@ pub fn watch(
 fn exit_status_to_job_status(status: io::Result<Option<ExitStatus>>) -> JobStatus {
     match status {
         Ok(result) => match result {
-            Some(exit_status) => JobStatus::Finished(exit_status),
+            Some(exit_status) => JobStatus::Finished(*exit_status.code().get_or_insert(0)),
             None => JobStatus::Running,
         },
         Err(_) => JobStatus::TimedOut,

@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fmt, io,
-    process::ExitStatus,
+    process::ExitCode,
     sync::{
         mpsc::{self, Receiver, Sender},
         Arc, Mutex,
@@ -20,7 +20,7 @@ struct Job {
     status: JobStatus,
     retries: Option<u8>,
     next_expected_status: Option<JobStatus>,
-    last_exit_status: ExitStatus, // TODO: Check the need of this
+    last_exit_code: i32, // TODO: Check the need of this
 }
 
 enum OsSignal {
@@ -48,9 +48,11 @@ enum JobAction {
 #[derive(Debug)]
 pub enum OrchestratorError {
     ServiceNotFound,
+    ServiceStopped,
     ServiceAlreadyStarted,
+    ServiceAlreadyStopping,
     JobNotFound,
-    JobSpawnError(io::Error),
+    JobIoError(io::Error),
 }
 
 impl fmt::Display for OrchestratorError {
@@ -72,7 +74,7 @@ pub enum JobStatus {
     Starting,
     Running,
     Stopping,
-    Finished(ExitStatus),
+    Finished(i32),
     TimedOut,
 }
 
@@ -100,6 +102,8 @@ impl Orchestrator {
         )
     }
 
+    // #################### UTILS ####################
+
     /// Checks for a job identified by alias. If the job does not exist it is created,
     /// and the status will be set to `Created`. If the job exists it returns it.
     fn create_job(&mut self, alias: String) -> Result<&mut Job, OrchestratorError> {
@@ -114,11 +118,11 @@ impl Orchestrator {
             status: JobStatus::Created,
             retries: service.calc_retries(),
             next_expected_status: Some(JobStatus::Running),
-            last_exit_status: ExitStatus::default(),
+            last_exit_code: 0,
         }))
     }
 
-    fn start_job(&mut self, alias: String) -> Result<Option<Vec<WatchedJob>>, OrchestratorError> {
+    fn start_job(&self, alias: String) -> Result<Option<Vec<WatchedJob>>, OrchestratorError> {
         let service = self
             .services
             .get(&alias)
@@ -132,7 +136,7 @@ impl Orchestrator {
             vec![WatchedJob {
                 process: service
                     .start()
-                    .map_err(|e| OrchestratorError::JobSpawnError(e))?,
+                    .map_err(|e| OrchestratorError::JobIoError(e))?,
                 status: JobStatus::Starting,
                 previous_status: JobStatus::Starting,
                 timeout: WatchedTimeout {
@@ -143,14 +147,39 @@ impl Orchestrator {
         ))
     }
 
+    fn stop_job(&self, alias: String) -> Result<(), OrchestratorError> {
+        let stop_signal = self
+            .services
+            .get(&alias)
+            .cloned()
+            .ok_or(OrchestratorError::ServiceNotFound)?
+            .stop_signal;
+
+        // Get all the jobs id
+        let job_pids: Vec<u32> = self
+            .watched
+            .lock()
+            .unwrap()
+            .get(&alias)
+            .ok_or(OrchestratorError::JobNotFound)?
+            .iter()
+            .map(|watched_job| watched_job.process.id())
+            .collect();
+
+        // Kill the jobs
+        for pid in job_pids {
+            // TODO: Avoid early return?
+            kill(pid, map_os_signal(stop_signal))
+                .map_err(|err| OrchestratorError::JobIoError(err))?;
+        }
+
+        Ok(())
+    }
+
+    // #################### REQUESTS ####################
     fn start_request(&mut self, alias: String) -> Result<(), OrchestratorError> {
         // Get or create a new job
-        let job = match self.create_job(alias.clone()) {
-            Ok(job) => job,
-            Err(err) => {
-                return Err(err);
-            }
-        };
+        let job = self.create_job(alias.clone())?;
 
         // Only finished, created and Free are considered valid states to start a job
         let mut response = match job.status {
@@ -161,11 +190,15 @@ impl Orchestrator {
             JobStatus::Finished(exit_status) => {
                 // At this point event loop will have moved the job
                 // out from the watcher
-                job.last_exit_status = exit_status;
+                job.last_exit_code = exit_status;
                 Ok(())
             }
             JobStatus::Free | JobStatus::Created => Ok(()),
         };
+
+        // Update job
+        job.status = JobStatus::Starting;
+        job.next_expected_status = Some(JobStatus::Running);
 
         // If response is positive, start the job
         if let Ok(_) = response {
@@ -175,6 +208,7 @@ impl Orchestrator {
                         // TODO: Do something with old jobs in this case?
                         eprintln!("Warning: Started new jobs but old where not cleaned up from the watcher: {old_watched_jobs:?}");
                     }
+
                     Ok(())
                 }
                 Err(err) => Err(err),
@@ -191,35 +225,29 @@ impl Orchestrator {
             .get_mut(&alias)
             .ok_or(OrchestratorError::JobNotFound)?;
 
-        // TODO: COntinue here, decide where to use nix crate, or libc to send specific signal to stop a process
-
         // Only starting and Running are considered valid states to stop a job
         let mut response = match job.status {
             JobStatus::Starting | JobStatus::Running => Ok(()),
             JobStatus::Stopping | JobStatus::TimedOut => {
-                Err(OrchestratorError::ServiceAlreadyStarted)
+                Err(OrchestratorError::ServiceAlreadyStopping)
             }
             JobStatus::Finished(exit_status) => {
                 // At this point event loop will have moved the job
                 // out from the watcher
-                job.last_exit_status = exit_status;
-                Ok(())
+                job.last_exit_code = exit_status;
+                Err(OrchestratorError::ServiceStopped)
             }
-            JobStatus::Free | JobStatus::Created => Ok(()),
+            JobStatus::Free | JobStatus::Created => Err(OrchestratorError::ServiceStopped),
         };
 
-        // If response is positive, start the job
+        // Update job
+        job.status = JobStatus::Stopping;
+        // TODO: Maybe Finished code should depend on the signal?
+        job.next_expected_status = Some(JobStatus::Finished(0));
+
+        // If response is positive, stop the job
         if let Ok(_) = response {
-            response = match self.start_job(alias) {
-                Ok(res) => {
-                    if let Some(old_watched_jobs) = res {
-                        // TODO: Do something with old jobs in this case?
-                        eprintln!("Warning: Started new jobs but old where not cleaned up from the watcher: {old_watched_jobs:?}");
-                    }
-                    Ok(())
-                }
-                Err(err) => Err(err),
-            };
+            response = self.stop_job(alias);
         };
 
         response
@@ -232,6 +260,11 @@ impl Orchestrator {
         thread::spawn(move || {
             watcher::watch(watched_jobs_thread, tx_events, Duration::from_millis(10));
         });
+
+        // NOTE: As designed orchestrate is only working with one sigle channel of requests.
+        // If not job structure should be protecetd by mutex. This way only watched needs
+        // protection since watcher also access the structure (in fact is the one
+        // that consumes most of the lock time)
 
         // TODO: There is a request channel for receiving client requests, the watcher will
         // send its events trough rx_events, must read from both channels without blocking
@@ -248,7 +281,7 @@ impl Orchestrator {
             let result = match request.action {
                 ServiceAction::Start(alias) => self.start_request(alias),
                 ServiceAction::Restart(_) => todo!(),
-                ServiceAction::Stop(_) => todo!(),
+                ServiceAction::Stop(alias) => self.stop_request(alias),
             };
 
             request
@@ -260,10 +293,19 @@ impl Orchestrator {
     }
 }
 
-fn kill(pid: i32, signal: OsSignal) -> io::Result<()> {
-    if unsafe { libc::kill(pid, signal.value()) } == -1 {
+// #################### FILE UTILS ####################
+
+fn kill(pid: u32, signal: OsSignal) -> io::Result<()> {
+    if unsafe { libc::kill(pid as i32, signal.value()) } == -1 {
         Err(io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+fn map_os_signal(signal: i32) -> OsSignal {
+    match signal {
+        15 => OsSignal::SigTerm,
+        _ => OsSignal::SigKill,
     }
 }

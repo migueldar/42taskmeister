@@ -32,7 +32,7 @@ pub struct Service {
     clone: u16,
     pub restart: RestartOptions,
     pub timeout: u64,
-    stop_signal: u32,
+    pub stop_signal: i32,
     stop_wait: u32,
     stdout: String,
     stdin: String,
