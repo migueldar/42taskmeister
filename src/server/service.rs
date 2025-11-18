@@ -33,7 +33,7 @@ pub struct Service {
     pub restart: RestartOptions,
     pub timeout: u64,
     pub stop_signal: i32,
-    stop_wait: u32,
+    pub stop_wait: u64,
     stdout: String,
     stdin: String,
     stderr: String,

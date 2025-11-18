@@ -107,6 +107,11 @@ impl Orchestrator {
         )
     }
 
+    // #################### GET/SET UTILS ####################
+    fn get_job_status(&self, alias: &str) -> Option<JobStatus> {
+        self.jobs.get(alias).map(|job| job.status.clone())
+    }
+
     // #################### UTILS ####################
 
     /// Checks for a job identified by alias. If the job does not exist it is created,
@@ -142,40 +147,53 @@ impl Orchestrator {
                 process: service
                     .start()
                     .map_err(|e| OrchestratorError::JobIoError(e))?,
-                status: JobStatus::Starting,
                 previous_status: JobStatus::Starting,
-                timeout: WatchedTimeout {
-                    created_at: Instant::now(),
-                    time: Duration::from_secs(service.timeout),
-                },
+                timeout: WatchedTimeout::new(Duration::from_secs(service.timeout)),
             }],
         ))
     }
 
-    fn stop_job(&self, alias: String) -> Result<(), OrchestratorError> {
-        let stop_signal = self
+    // Stops the job according to the signal specified in the service configuration
+    fn stop_job(&self, alias: &str) -> Result<(), OrchestratorError> {
+        let service = self
             .services
-            .get(&alias)
+            .get(alias)
             .cloned()
-            .ok_or(OrchestratorError::ServiceNotFound)?
-            .stop_signal;
+            .ok_or(OrchestratorError::ServiceNotFound)?;
 
+        self.kill_job(
+            alias,
+            service.stop_signal,
+            Duration::from_secs(service.stop_wait),
+        )
+    }
+
+    // Sends a specific signal to the job
+    fn kill_job(
+        &self,
+        alias: &str,
+        signal: i32,
+        timeout: Duration,
+    ) -> Result<(), OrchestratorError> {
         // Get all the jobs id
         let job_pids: Vec<u32> = self
             .watched
             .lock()
             .unwrap()
-            .get(&alias)
+            .get_mut(alias)
             .ok_or(OrchestratorError::JobNotFound)?
-            .iter()
-            .map(|watched_job| watched_job.process.id())
+            .iter_mut()
+            .map(|watched_job| {
+                watched_job.previous_status = JobStatus::Stopping;
+                watched_job.timeout = WatchedTimeout::new(timeout);
+                watched_job.process.id()
+            })
             .collect();
 
         // Kill the jobs
         for pid in job_pids {
             // TODO: Avoid early return?
-            kill(pid, map_os_signal(stop_signal))
-                .map_err(|err| OrchestratorError::JobIoError(err))?;
+            kill(pid, map_os_signal(signal)).map_err(|err| OrchestratorError::JobIoError(err))?;
         }
 
         Ok(())
@@ -252,7 +270,7 @@ impl Orchestrator {
 
         // If response is positive, stop the job
         if let Ok(_) = response {
-            response = self.stop_job(alias);
+            response = self.stop_job(&alias);
         };
 
         response
@@ -287,10 +305,53 @@ impl Orchestrator {
                     request
                         .response_channel
                         .send(result)
-                        .inspect_err(|err| eprintln!("Error: Sendig response to client: {err:?}"))
+                        .inspect_err(|err| eprintln!("Error: Sending response to client: {err:?}"))
                         .ok();
                 }
-                OrchestratorMsg::Event(event) => todo!(),
+                OrchestratorMsg::Event(event) => {
+                    println!("Received event:\n{event:#?}");
+                    match event.status {
+                        JobStatus::Free => todo!(),
+                        JobStatus::Created => todo!(),
+                        JobStatus::Starting => todo!(),
+                        JobStatus::Running => println!("Orchestrator Received Running event!"),
+                        JobStatus::Stopping => todo!(),
+                        JobStatus::Finished(code) => {
+                            println!("Orchestrator Received Finish ({code}) event!")
+                            // TODO: Remove watched job from list
+                        }
+                        JobStatus::TimedOut => {
+                            let Some(current_job_status) = self.get_job_status(&event.alias) else {
+                                continue;
+                            };
+
+                            // If job (not watched job) is in time out status, it means that
+                            // we previously tried to stop or kill it
+                            if current_job_status == JobStatus::TimedOut {
+                                if let Err(err) = self.kill_job(
+                                    &event.alias,
+                                    libc::SIGKILL,
+                                    Duration::from_secs(5),
+                                ) {
+                                    eprintln!("Error: Kill job: {err}");
+                                    continue;
+                                };
+                            } else {
+                                if let Err(err) = self.stop_job(&event.alias) {
+                                    eprintln!("Error: Couldn't stop job gracefully: {err}");
+                                    continue;
+                                };
+
+                                // Update the job status after a gracefull stop try
+                                let Some(job) = self.jobs.get_mut(&event.alias) else {
+                                    continue;
+                                };
+                                job.status = JobStatus::TimedOut;
+                                job.next_expected_status = Some(JobStatus::Finished(0));
+                            }
+                        }
+                    }
+                }
             }
         }
     }
