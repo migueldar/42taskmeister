@@ -1,13 +1,12 @@
 use std::{
     collections::HashMap,
     fmt, io,
-    process::ExitCode,
     sync::{
         mpsc::{self, Receiver, Sender},
         Arc, Mutex,
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use libc;
@@ -19,30 +18,7 @@ use super::service::{ServiceAction, Services};
 struct Job {
     status: JobStatus,
     retries: Option<u8>,
-    next_expected_status: Option<JobStatus>,
     last_exit_code: i32, // TODO: Check the need of this
-}
-
-enum OsSignal {
-    SigTerm,
-    SigKill,
-}
-
-impl OsSignal {
-    pub fn value(&self) -> i32 {
-        match self {
-            OsSignal::SigTerm => libc::SIGTERM,
-            OsSignal::SigKill => libc::SIGKILL,
-        }
-    }
-}
-
-#[derive(Debug)]
-enum JobAction {
-    Start,
-    Restart,
-    Stop,
-    Inform,
 }
 
 #[derive(Debug)]
@@ -127,9 +103,13 @@ impl Orchestrator {
         Ok(self.jobs.entry(alias.clone()).or_insert(Job {
             status: JobStatus::Created,
             retries: service.calc_retries(),
-            next_expected_status: Some(JobStatus::Running),
+
             last_exit_code: 0,
         }))
+    }
+
+    fn remove_watched(&self, alias: &str) -> Option<Vec<WatchedJob>> {
+        self.watched.lock().unwrap().remove(alias)
     }
 
     fn start_job(&self, alias: String) -> Result<Option<Vec<WatchedJob>>, OrchestratorError> {
@@ -168,7 +148,7 @@ impl Orchestrator {
         )
     }
 
-    // Sends a specific signal to the job
+    // Sends a specific stop signal to the job, setting the timeout for the process to stop
     fn kill_job(
         &self,
         alias: &str,
@@ -184,7 +164,6 @@ impl Orchestrator {
             .ok_or(OrchestratorError::JobNotFound)?
             .iter_mut()
             .map(|watched_job| {
-                watched_job.previous_status = JobStatus::Stopping;
                 watched_job.timeout = WatchedTimeout::new(timeout);
                 watched_job.process.id()
             })
@@ -193,7 +172,7 @@ impl Orchestrator {
         // Kill the jobs
         for pid in job_pids {
             // TODO: Avoid early return?
-            kill(pid, map_os_signal(signal)).map_err(|err| OrchestratorError::JobIoError(err))?;
+            kill(pid, signal).map_err(|err| OrchestratorError::JobIoError(err))?;
         }
 
         Ok(())
@@ -221,7 +200,6 @@ impl Orchestrator {
 
         // Update job
         job.status = JobStatus::Starting;
-        job.next_expected_status = Some(JobStatus::Running);
 
         // If response is positive, start the job
         if let Ok(_) = response {
@@ -265,8 +243,6 @@ impl Orchestrator {
 
         // Update job
         job.status = JobStatus::Stopping;
-        // TODO: Maybe Finished code should depend on the signal?
-        job.next_expected_status = Some(JobStatus::Finished(0));
 
         // If response is positive, stop the job
         if let Ok(_) = response {
@@ -274,6 +250,61 @@ impl Orchestrator {
         };
 
         response
+    }
+
+    fn manage_event(&mut self, event: JobEvent) {
+        println!(
+            "[{}] Orchestrator Received Event: ({:?})",
+            event.alias, event.status
+        );
+
+        let Some(current_job_status) = self.get_job_status(&event.alias) else {
+            return;
+        };
+
+        let new_status = match event.status {
+            JobStatus::Free | JobStatus::Created | JobStatus::Starting | JobStatus::Stopping => {
+                event.status
+            }
+            JobStatus::Running => {
+                // If previous status was timeout, we are waiting for stop
+                if current_job_status == JobStatus::TimedOut {
+                    JobStatus::TimedOut
+                } else {
+                    event.status
+                }
+            }
+            JobStatus::Finished(_) => {
+                self.remove_watched(&event.alias);
+
+                event.status
+            }
+            JobStatus::TimedOut => {
+                // If job (not watched job) is in time out status, it means that
+                // we previously tried to stop or kill it
+                if current_job_status == JobStatus::TimedOut {
+                    if let Err(err) =
+                        self.kill_job(&event.alias, libc::SIGKILL, Duration::from_secs(5))
+                    {
+                        eprintln!("Error: Kill job: {err}");
+                        return;
+                    };
+                } else {
+                    if let Err(err) = self.stop_job(&event.alias) {
+                        eprintln!("Error: Couldn't stop job gracefully: {err}");
+                        return;
+                    };
+                }
+                event.status
+            }
+        };
+
+        // TODO: Check to extract job borrow by a getter/setter
+        let Some(job) = self.jobs.get_mut(&event.alias) else {
+            return;
+        };
+
+        job.status = new_status;
     }
 
     pub fn orchestrate(mut self) {
@@ -308,50 +339,7 @@ impl Orchestrator {
                         .inspect_err(|err| eprintln!("Error: Sending response to client: {err:?}"))
                         .ok();
                 }
-                OrchestratorMsg::Event(event) => {
-                    println!("Received event:\n{event:#?}");
-                    match event.status {
-                        JobStatus::Free => todo!(),
-                        JobStatus::Created => todo!(),
-                        JobStatus::Starting => todo!(),
-                        JobStatus::Running => println!("Orchestrator Received Running event!"),
-                        JobStatus::Stopping => todo!(),
-                        JobStatus::Finished(code) => {
-                            println!("Orchestrator Received Finish ({code}) event!")
-                            // TODO: Remove watched job from list
-                        }
-                        JobStatus::TimedOut => {
-                            let Some(current_job_status) = self.get_job_status(&event.alias) else {
-                                continue;
-                            };
-
-                            // If job (not watched job) is in time out status, it means that
-                            // we previously tried to stop or kill it
-                            if current_job_status == JobStatus::TimedOut {
-                                if let Err(err) = self.kill_job(
-                                    &event.alias,
-                                    libc::SIGKILL,
-                                    Duration::from_secs(5),
-                                ) {
-                                    eprintln!("Error: Kill job: {err}");
-                                    continue;
-                                };
-                            } else {
-                                if let Err(err) = self.stop_job(&event.alias) {
-                                    eprintln!("Error: Couldn't stop job gracefully: {err}");
-                                    continue;
-                                };
-
-                                // Update the job status after a gracefull stop try
-                                let Some(job) = self.jobs.get_mut(&event.alias) else {
-                                    continue;
-                                };
-                                job.status = JobStatus::TimedOut;
-                                job.next_expected_status = Some(JobStatus::Finished(0));
-                            }
-                        }
-                    }
-                }
+                OrchestratorMsg::Event(event) => self.manage_event(event),
             }
         }
     }
@@ -359,17 +347,10 @@ impl Orchestrator {
 
 // #################### FILE UTILS ####################
 
-fn kill(pid: u32, signal: OsSignal) -> io::Result<()> {
-    if unsafe { libc::kill(pid as i32, signal.value()) } == -1 {
+fn kill(pid: u32, signal: i32) -> io::Result<()> {
+    if unsafe { libc::kill(pid as i32, signal) } == -1 {
         Err(io::Error::last_os_error())
     } else {
         Ok(())
-    }
-}
-
-fn map_os_signal(signal: i32) -> OsSignal {
-    match signal {
-        15 => OsSignal::SigTerm,
-        _ => OsSignal::SigKill,
     }
 }

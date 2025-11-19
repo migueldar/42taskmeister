@@ -49,13 +49,7 @@ pub fn watch(
     loop {
         for (alias, jobs) in watched_jobs.lock().unwrap().iter_mut() {
             for job in jobs {
-                if job.previous_status == JobStatus::TimedOut {
-                    println!("Job in timeout {job:#?}");
-                    continue;
-                }
-
                 if job.timeout.has_timed_out() {
-                    println!("Job timed out {job:#?}");
                     job.previous_status = JobStatus::TimedOut;
 
                     if let Err(e) = tx_events.send(OrchestratorMsg::Event(JobEvent {
