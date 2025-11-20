@@ -17,20 +17,27 @@ pub struct JobEvent {
 
 #[derive(Debug)]
 pub struct WatchedTimeout {
-    pub created_at: Instant,
-    pub time: Duration,
+    created_at: Instant,
+    time: Option<Duration>,
 }
 
 impl WatchedTimeout {
     pub fn has_timed_out(&self) -> bool {
-        self.created_at.elapsed() >= self.time
+        match self.time {
+            Some(time) => self.created_at.elapsed() >= time,
+            None => false,
+        }
     }
 
-    pub fn new(time: Duration) -> WatchedTimeout {
+    pub fn new(time: Option<Duration>) -> WatchedTimeout {
         WatchedTimeout {
             created_at: Instant::now(),
             time: time,
         }
+    }
+
+    pub fn remove(&mut self) {
+        self.time = None
     }
 }
 

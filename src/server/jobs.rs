@@ -112,6 +112,14 @@ impl Orchestrator {
         self.watched.lock().unwrap().remove(alias)
     }
 
+    fn remove_watched_timeout(&self, alias: &str) {
+        if let Some(watched_jobs) = self.watched.lock().unwrap().get_mut(alias) {
+            for job in watched_jobs {
+                job.timeout.remove();
+            }
+        }
+    }
+
     fn start_job(&self, alias: String) -> Result<Option<Vec<WatchedJob>>, OrchestratorError> {
         let service = self
             .services
@@ -128,7 +136,7 @@ impl Orchestrator {
                     .start()
                     .map_err(|e| OrchestratorError::JobIoError(e))?,
                 previous_status: JobStatus::Starting,
-                timeout: WatchedTimeout::new(Duration::from_secs(service.timeout)),
+                timeout: WatchedTimeout::new(Some(Duration::from_secs(service.timeout))),
             }],
         ))
     }
@@ -164,7 +172,7 @@ impl Orchestrator {
             .ok_or(OrchestratorError::JobNotFound)?
             .iter_mut()
             .map(|watched_job| {
-                watched_job.timeout = WatchedTimeout::new(timeout);
+                watched_job.timeout = WatchedTimeout::new(Some(timeout));
                 watched_job.process.id()
             })
             .collect();
@@ -253,12 +261,13 @@ impl Orchestrator {
     }
 
     fn manage_event(&mut self, event: JobEvent) {
-        println!(
-            "[{}] Orchestrator Received Event: ({:?})",
-            event.alias, event.status
-        );
+        println!("[{}] {:?}", event.alias, event.status);
 
-        let Some(current_job_status) = self.get_job_status(&event.alias) else {
+        let Some(service) = self.services.get(&event.alias).cloned() else {
+            return;
+        };
+
+        let Some(previous_status) = self.get_job_status(&event.alias) else {
             return;
         };
 
@@ -267,10 +276,13 @@ impl Orchestrator {
                 event.status
             }
             JobStatus::Running => {
-                // If previous status was timeout, we are waiting for stop
-                if current_job_status == JobStatus::TimedOut {
+                // (prev: timeout, current: Running) => Only possibilty: Timed out stopping
+                if previous_status == JobStatus::TimedOut {
+                    // Return timeout here so in next timeout event is known that
+                    // job wasn't stopped
                     JobStatus::TimedOut
                 } else {
+                    self.remove_watched_timeout(&event.alias);
                     event.status
                 }
             }
@@ -280,20 +292,31 @@ impl Orchestrator {
                 event.status
             }
             JobStatus::TimedOut => {
-                // If job (not watched job) is in time out status, it means that
-                // we previously tried to stop or kill it
-                if current_job_status == JobStatus::TimedOut {
-                    if let Err(err) =
-                        self.kill_job(&event.alias, libc::SIGKILL, Duration::from_secs(5))
-                    {
-                        eprintln!("Error: Kill job: {err}");
-                        return;
-                    };
-                } else {
-                    if let Err(err) = self.stop_job(&event.alias) {
-                        eprintln!("Error: Couldn't stop job gracefully: {err}");
-                        return;
-                    };
+                // TODO: Next implement retries
+                match previous_status {
+                    JobStatus::TimedOut => {
+                        // If job (not watched job) is in time out status, it means that
+                        // we previously tried to stop or kill it
+                        if let Err(err) = self.kill_job(
+                            &event.alias,
+                            libc::SIGKILL,
+                            Duration::from_secs(service.stop_wait),
+                        ) {
+                            eprintln!("Error: Kill job: {err}");
+                            return;
+                        };
+                    }
+                    _ => {
+                        // Gracefully stop
+                        if let Err(err) = self.kill_job(
+                            &event.alias,
+                            service.stop_signal,
+                            Duration::from_secs(service.stop_wait),
+                        ) {
+                            eprintln!("Error: Couldn't stop job gracefully: {err}");
+                            return;
+                        };
+                    }
                 }
                 event.status
             }
