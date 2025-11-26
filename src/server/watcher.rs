@@ -55,34 +55,26 @@ pub fn watch(
 ) {
     loop {
         for (alias, jobs) in watched_jobs.lock().unwrap().iter_mut() {
+            let event_sender = |event| {
+                if let Err(e) = tx_events.send(OrchestratorMsg::Event(JobEvent {
+                    alias: alias.clone(),
+                    status: event,
+                })) {
+                    eprintln!("Watcher send event error: {e}");
+                }
+            };
+
             for job in jobs {
                 if job.timeout.has_timed_out() {
                     job.previous_status = JobStatus::TimedOut;
-
-                    if let Err(e) = tx_events.send(OrchestratorMsg::Event(JobEvent {
-                        alias: alias.clone(),
-                        status: JobStatus::TimedOut,
-                    })) {
-                        eprintln!("Watcher send event error: {e}");
-                    }
-
+                    event_sender(JobStatus::TimedOut);
                     continue;
                 }
 
                 let new_status = exit_status_to_job_status(job.process.try_wait());
                 if new_status != job.previous_status {
-                    // println!("NEW STATUS: {new_status:#?}");
-                    // println!("OLD STATUS: {:#?}", job.previous_status);
-
                     job.previous_status = new_status.clone();
-
-                    if let Err(e) = tx_events.send(OrchestratorMsg::Event(JobEvent {
-                        alias: alias.clone(),
-                        status: new_status,
-                    })) {
-                        eprintln!("Watcher send event error: {e}");
-                    }
-
+                    event_sender(new_status);
                     continue;
                 }
             }

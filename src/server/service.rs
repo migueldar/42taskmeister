@@ -17,7 +17,7 @@ pub enum ServiceAction {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
-#[serde(tag = "type", content = "value")]
+#[serde(tag = "type", content = "retries")]
 pub enum RestartOptions {
     #[default]
     Never,
@@ -34,6 +34,7 @@ pub struct Service {
     pub timeout: u64,
     pub stop_signal: i32,
     pub stop_wait: u64,
+    exit_codes: Vec<i32>,
     stdout: String,
     stdin: String,
     stderr: String,
@@ -160,10 +161,12 @@ impl Service {
         .spawn()
     }
 
-    pub fn calc_retries(&self) -> Option<u8> {
-        match self.restart {
-            RestartOptions::Never => None,
-            RestartOptions::Always(retries) | RestartOptions::OnError(retries) => Some(retries),
+    pub fn validate_exit_code(&self, exit_code: i32) -> bool {
+        for code in &self.exit_codes {
+            if exit_code == *code {
+                return true;
+            }
         }
+        return false;
     }
 }

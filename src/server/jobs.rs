@@ -13,11 +13,11 @@ use libc;
 
 use crate::watcher::{self, JobEvent, WatchedJob, WatchedTimeout};
 
-use super::service::{ServiceAction, Services};
+use super::service::{RestartOptions, ServiceAction, Services};
 
 struct Job {
     status: JobStatus,
-    retries: Option<u8>,
+    retries: u8,
     last_exit_code: i32, // TODO: Check the need of this
 }
 
@@ -88,22 +88,22 @@ impl Orchestrator {
         self.jobs.get(alias).map(|job| job.status.clone())
     }
 
+    fn inc_job_retries(&mut self, alias: &str) -> Option<u8> {
+        self.jobs.get_mut(alias).map(|job| {
+            job.retries += 1;
+            job.retries
+        })
+    }
+
     // #################### UTILS ####################
 
     /// Checks for a job identified by alias. If the job does not exist it is created,
     /// and the status will be set to `Created`. If the job exists it returns it.
-    fn create_job(&mut self, alias: String) -> Result<&mut Job, OrchestratorError> {
-        let service = self
-            .services
-            .get(&alias)
-            .cloned()
-            .ok_or(OrchestratorError::ServiceNotFound)?;
-
+    fn create_job(&mut self, alias: &str) -> Result<&mut Job, OrchestratorError> {
         // If job does not exist, create it
-        Ok(self.jobs.entry(alias.clone()).or_insert(Job {
+        Ok(self.jobs.entry(alias.to_string()).or_insert(Job {
             status: JobStatus::Created,
-            retries: service.calc_retries(),
-
+            retries: 0,
             last_exit_code: 0,
         }))
     }
@@ -120,17 +120,18 @@ impl Orchestrator {
         }
     }
 
-    fn start_job(&self, alias: String) -> Result<Option<Vec<WatchedJob>>, OrchestratorError> {
+    fn start_job(&self, alias: &str) -> Result<Option<Vec<WatchedJob>>, OrchestratorError> {
         let service = self
             .services
             .get(&alias)
             .cloned()
             .ok_or(OrchestratorError::ServiceNotFound)?;
 
+        eprintln!("[{}] Starting", alias);
         // Add handler to the watched jobs
         let mut watched = self.watched.lock().unwrap();
         Ok(watched.insert(
-            alias,
+            alias.to_string(),
             vec![WatchedJob {
                 process: service
                     .start()
@@ -163,6 +164,8 @@ impl Orchestrator {
         signal: i32,
         timeout: Duration,
     ) -> Result<(), OrchestratorError> {
+        eprintln!("[{}] Killing", alias);
+
         // Get all the jobs id
         let job_pids: Vec<u32> = self
             .watched
@@ -189,7 +192,7 @@ impl Orchestrator {
     // #################### REQUESTS ####################
     fn start_request(&mut self, alias: String) -> Result<(), OrchestratorError> {
         // Get or create a new job
-        let job = self.create_job(alias.clone())?;
+        let job = self.create_job(&alias)?;
 
         // Only finished, created and Free are considered valid states to start a job
         let mut response = match job.status {
@@ -211,7 +214,7 @@ impl Orchestrator {
 
         // If response is positive, start the job
         if let Ok(_) = response {
-            response = match self.start_job(alias) {
+            response = match self.start_job(&alias) {
                 Ok(res) => {
                     if let Some(old_watched_jobs) = res {
                         // TODO: Do something with old jobs in this case?
@@ -275,6 +278,7 @@ impl Orchestrator {
             JobStatus::Free | JobStatus::Created | JobStatus::Starting | JobStatus::Stopping => {
                 event.status
             }
+
             JobStatus::Running => {
                 // (prev: timeout, current: Running) => Only possibilty: Timed out stopping
                 if previous_status == JobStatus::TimedOut {
@@ -286,13 +290,56 @@ impl Orchestrator {
                     event.status
                 }
             }
-            JobStatus::Finished(_) => {
+
+            JobStatus::Finished(exit_code) => {
+                // First remove the watched job
                 self.remove_watched(&event.alias);
 
-                event.status
+                // Restart if needed
+                match service.restart {
+                    RestartOptions::Never => event.status,
+
+                    RestartOptions::Always(retries) => 'status: {
+                        if let Some(current_retries) = self.inc_job_retries(&event.alias) {
+                            // Restrat if we didn't reach the maximum retries
+                            if current_retries < retries {
+                                break 'status match self.start_job(&event.alias) {
+                                    Ok(_) => JobStatus::Running,
+                                    Err(err) => {
+                                        eprintln!("Error restarting {}: {}", &event.alias, err);
+                                        event.status
+                                    }
+                                };
+                            }
+                        }
+
+                        eprintln!("[{}] Exhausted retries", &event.alias);
+                        event.status
+                    }
+
+                    RestartOptions::OnError(retries) => 'status: {
+                        if let Some(current_retries) = self.inc_job_retries(&event.alias) {
+                            // Restrat if we didn't reach the maximum retries, and the code is error
+                            if !service.validate_exit_code(exit_code) {
+                                if current_retries < retries {
+                                    break 'status match self.start_job(&event.alias) {
+                                        Ok(_) => JobStatus::Running,
+                                        Err(err) => {
+                                            eprintln!("Error restarting {}: {}", &event.alias, err);
+                                            event.status
+                                        }
+                                    };
+                                }
+                            }
+                            break 'status event.status;
+                        }
+                        eprintln!("[{}] Exhausted retries", &event.alias);
+                        event.status
+                    }
+                }
             }
+
             JobStatus::TimedOut => {
-                // TODO: Next implement retries
                 match previous_status {
                     JobStatus::TimedOut => {
                         // If job (not watched job) is in time out status, it means that
@@ -303,7 +350,6 @@ impl Orchestrator {
                             Duration::from_secs(service.stop_wait),
                         ) {
                             eprintln!("Error: Kill job: {err}");
-                            return;
                         };
                     }
                     _ => {
@@ -314,7 +360,6 @@ impl Orchestrator {
                             Duration::from_secs(service.stop_wait),
                         ) {
                             eprintln!("Error: Couldn't stop job gracefully: {err}");
-                            return;
                         };
                     }
                 }
