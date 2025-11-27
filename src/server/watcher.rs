@@ -66,8 +66,10 @@ pub fn watch(
 
             for job in jobs {
                 if job.timeout.has_timed_out() {
-                    job.previous_status = JobStatus::TimedOut;
-                    event_sender(JobStatus::TimedOut);
+                    if job.previous_status != JobStatus::TimedOut {
+                        job.previous_status = JobStatus::TimedOut;
+                        event_sender(JobStatus::TimedOut);
+                    }
                     continue;
                 }
 

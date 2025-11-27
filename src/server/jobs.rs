@@ -137,6 +137,7 @@ impl Orchestrator {
                     .start()
                     .map_err(|e| OrchestratorError::JobIoError(e))?,
                 previous_status: JobStatus::Starting,
+                // TODO: Convert this to health check
                 timeout: WatchedTimeout::new(Some(Duration::from_secs(service.timeout))),
             }],
         ))
@@ -164,7 +165,7 @@ impl Orchestrator {
         signal: i32,
         timeout: Duration,
     ) -> Result<(), OrchestratorError> {
-        eprintln!("[{}] Killing", alias);
+        eprintln!("[{}] Killing({})", alias, signal);
 
         // Get all the jobs id
         let job_pids: Vec<u32> = self
@@ -291,9 +292,16 @@ impl Orchestrator {
                 }
             }
 
-            JobStatus::Finished(exit_code) => {
+            JobStatus::Finished(exit_code) => 'finished: {
                 // First remove the watched job
                 self.remove_watched(&event.alias);
+
+                // TODO: Check for health check, timeout can only happen on stop?
+                // we can make for health check to timeout and then check running.
+                // But in finished a timeout can only mean previous stop try.
+                if previous_status == JobStatus::TimedOut {
+                    break 'finished event.status;
+                }
 
                 // Restart if needed
                 match service.restart {
@@ -312,7 +320,6 @@ impl Orchestrator {
                                 };
                             }
                         }
-
                         eprintln!("[{}] Exhausted retries", &event.alias);
                         event.status
                     }
@@ -330,8 +337,9 @@ impl Orchestrator {
                                         }
                                     };
                                 }
+                            } else {
+                                break 'status event.status;
                             }
-                            break 'status event.status;
                         }
                         eprintln!("[{}] Exhausted retries", &event.alias);
                         event.status
@@ -341,7 +349,7 @@ impl Orchestrator {
 
             JobStatus::TimedOut => {
                 match previous_status {
-                    JobStatus::TimedOut => {
+                    JobStatus::TimedOut | JobStatus::Stopping => {
                         // If job (not watched job) is in time out status, it means that
                         // we previously tried to stop or kill it
                         if let Err(err) = self.kill_job(
@@ -383,7 +391,7 @@ impl Orchestrator {
             watcher::watch(watched_jobs_thread, tx_events, Duration::from_millis(10));
         });
 
-        // NOTE: As designed orchestrate is only working with one sigle channel of requests.
+        // NOTE: By design orchestrate is only working with one sigle channel of requests.
         // If not job structure should be protecetd by mutex. This way only watched needs
         // protection since watcher also access the structure (in fact is the one
         // that consumes most of the lock time)

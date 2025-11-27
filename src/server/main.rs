@@ -13,6 +13,7 @@ use std::{
     net::{TcpListener, TcpStream},
     sync::mpsc,
     thread::{self},
+    time::Duration,
 };
 use taskmeister::{dir_utils, Request, Response, ResponsePart};
 
@@ -58,6 +59,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let res: Response = process_request(&req);
                 sock_write.write(serde_json::to_string(&res)?.as_bytes())?;
 
+                // START
                 let (cli_tx, cli_rx) = mpsc::channel();
                 requests_tx
                     .send(jobs::OrchestratorMsg::Request(OrchestratorRequest {
@@ -71,6 +73,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                     println!("Received Orchestrator response:\n{resp:?}");
                     break;
                 }
+
+                thread::sleep(Duration::from_secs(1));
+
+                // STOP
+                // let (cli_tx, cli_rx) = mpsc::channel();
+                // requests_tx
+                //     .send(jobs::OrchestratorMsg::Request(OrchestratorRequest {
+                //         action: service::ServiceAction::Stop("ls1".to_string()),
+                //         response_channel: cli_tx,
+                //     }))
+                //     .inspect_err(|err| eprintln!("Error sending request to orchestrator! {err:?}"))
+                //     .ok();
+
+                // for resp in cli_rx {
+                //     println!("Received Orchestrator response:\n{resp:?}");
+                //     break;
+                // }
             }
         });
 
