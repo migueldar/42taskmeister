@@ -45,10 +45,9 @@ pub struct OrchestratorRequest {
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum JobStatus {
-    Free,
     Created,
     Starting,
-    Running,
+    Running(bool), // While false job is not healthy
     Stopping,
     Finished(i32),
     TimedOut,
@@ -153,7 +152,6 @@ impl Orchestrator {
                     .start()
                     .map_err(|e| OrchestratorError::JobIoError(e))?,
                 previous_status: JobStatus::Starting,
-                // TODO: Convert this to health check
                 timeout: WatchedTimeout::new(Some(Duration::from_secs(service.start_time))),
             }],
         ))
@@ -214,7 +212,7 @@ impl Orchestrator {
         // Only finished, created and Free are considered valid states to start a job
         let mut response = match job.status {
             JobStatus::Starting
-            | JobStatus::Running
+            | JobStatus::Running(_)
             | JobStatus::Stopping
             | JobStatus::TimedOut => Err(OrchestratorError::ServiceAlreadyStarted),
             JobStatus::Finished(exit_status) => {
@@ -223,7 +221,7 @@ impl Orchestrator {
                 job.last_exit_code = exit_status;
                 Ok(())
             }
-            JobStatus::Free | JobStatus::Created => Ok(()),
+            JobStatus::Created => Ok(()),
         };
 
         // Update job
@@ -256,7 +254,7 @@ impl Orchestrator {
 
         // Only starting and Running are considered valid states to stop a job
         let mut response = match job.status {
-            JobStatus::Starting | JobStatus::Running => Ok(()),
+            JobStatus::Starting | JobStatus::Running(_) => Ok(()),
             JobStatus::Stopping | JobStatus::TimedOut => {
                 Err(OrchestratorError::ServiceAlreadyStopping)
             }
@@ -266,7 +264,7 @@ impl Orchestrator {
                 job.last_exit_code = exit_status;
                 Err(OrchestratorError::ServiceStopped)
             }
-            JobStatus::Free | JobStatus::Created => Err(OrchestratorError::ServiceStopped),
+            JobStatus::Created => Err(OrchestratorError::ServiceStopped),
         };
 
         // Update job
@@ -292,30 +290,29 @@ impl Orchestrator {
         };
 
         let new_status = match event.status {
-            JobStatus::Free | JobStatus::Created | JobStatus::Starting | JobStatus::Stopping => {
-                event.status
-            }
+            JobStatus::Created | JobStatus::Starting | JobStatus::Stopping => event.status,
 
-            JobStatus::Running => {
+            JobStatus::Running(_) => {
                 match previous_status {
-                    JobStatus::Free | JobStatus::Created | JobStatus::Running => event.status,
-                    JobStatus::Stopping => {
-                        // If it is stopping it is comming from timeout
-                        JobStatus::TimedOut
-                    }
-                    JobStatus::Starting | JobStatus::Finished(_) => {
+                    JobStatus::Created
+                    | JobStatus::Finished(_)
+                    | JobStatus::Running(_)
+                    | JobStatus::Stopping => event.status,
+
+                    JobStatus::Starting => {
                         eprintln!("[{}] Starting...", event.alias);
                         // Watched to starting, wait the timeout to set the job as healthy
-                        self.set_watched_status(&event.alias, JobStatus::Starting)
+                        self.set_watched_status(&event.alias, JobStatus::Running(false))
                             .inspect_err(|err| eprintln!("Error setting watched status: {err}"))
                             .ok();
-                        JobStatus::Running
+                        JobStatus::Running(false)
                     }
+
                     JobStatus::TimedOut => {
                         // If cames from timeout, means that the health startup
                         // time has successfully completed
                         eprintln!("[{}] Healthy ✅", event.alias);
-                        JobStatus::Running
+                        JobStatus::Running(true)
                     }
                 }
             }
@@ -338,7 +335,7 @@ impl Orchestrator {
                             // Restrat if we didn't reach the maximum retries
                             if current_retries < retries {
                                 break 'status match self.start_job(&event.alias) {
-                                    Ok(_) => JobStatus::Running,
+                                    Ok(_) => JobStatus::Starting,
                                     Err(err) => {
                                         eprintln!("Error restarting {}: {}", &event.alias, err);
                                         event.status
@@ -356,7 +353,7 @@ impl Orchestrator {
                             if !service.validate_exit_code(exit_code) {
                                 if current_retries < retries {
                                     break 'status match self.start_job(&event.alias) {
-                                        Ok(_) => JobStatus::Running,
+                                        Ok(_) => JobStatus::Starting,
                                         Err(err) => {
                                             eprintln!("Error restarting {}: {}", &event.alias, err);
                                             event.status
@@ -375,7 +372,7 @@ impl Orchestrator {
 
             JobStatus::TimedOut => {
                 match previous_status {
-                    JobStatus::Running | JobStatus::Starting => {
+                    JobStatus::Running(_) | JobStatus::Starting => {
                         // If it comes from running it means it is healthy now
                         self.remove_watched_timeout(&event.alias);
                         JobStatus::TimedOut
