@@ -294,11 +294,10 @@ impl Orchestrator {
 
             JobStatus::Running(_) => {
                 match previous_status {
-                    JobStatus::Created
-                    | JobStatus::Finished(_)
-                    | JobStatus::Running(_)
-                    | JobStatus::Stopping => event.status,
-
+                    JobStatus::Created | JobStatus::Finished(_) | JobStatus::Running(_) => {
+                        event.status
+                    }
+                    JobStatus::Stopping => JobStatus::Stopping,
                     JobStatus::Starting => {
                         eprintln!("[{}] Starting...", event.alias);
                         // Watched to starting, wait the timeout to set the job as healthy
@@ -407,7 +406,7 @@ impl Orchestrator {
         let tx_events = self.messages_tx.clone();
 
         thread::spawn(move || {
-            watcher::watch(watched_jobs_thread, tx_events, Duration::from_millis(10));
+            watcher::watch(watched_jobs_thread, tx_events, Duration::from_millis(100));
         });
 
         // NOTE: By design orchestrate is only working with one sigle channel of requests.
