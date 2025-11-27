@@ -31,7 +31,7 @@ pub struct Service {
     cmd: String,
     clone: u16,
     pub restart: RestartOptions,
-    pub timeout: u64,
+    pub start_time: u64,
     pub stop_signal: i32,
     pub stop_wait: u64,
     exit_codes: Vec<i32>,

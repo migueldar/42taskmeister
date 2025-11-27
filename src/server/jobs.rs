@@ -95,6 +95,22 @@ impl Orchestrator {
         })
     }
 
+    fn set_watched_status(
+        &mut self,
+        alias: &str,
+        new_status: JobStatus,
+    ) -> Result<(), OrchestratorError> {
+        self.watched
+            .lock()
+            .unwrap()
+            .get_mut(alias)
+            .ok_or(OrchestratorError::JobNotFound)?
+            .iter_mut()
+            .for_each(|watched_job| watched_job.previous_status = new_status.clone());
+
+        Ok(())
+    }
+
     // #################### UTILS ####################
 
     /// Checks for a job identified by alias. If the job does not exist it is created,
@@ -138,7 +154,7 @@ impl Orchestrator {
                     .map_err(|e| OrchestratorError::JobIoError(e))?,
                 previous_status: JobStatus::Starting,
                 // TODO: Convert this to health check
-                timeout: WatchedTimeout::new(Some(Duration::from_secs(service.timeout))),
+                timeout: WatchedTimeout::new(Some(Duration::from_secs(service.start_time))),
             }],
         ))
     }
@@ -265,7 +281,7 @@ impl Orchestrator {
     }
 
     fn manage_event(&mut self, event: JobEvent) {
-        println!("[{}] {:?}", event.alias, event.status);
+        eprintln!("[Event] [{}] {:?}", event.alias, event.status);
 
         let Some(service) = self.services.get(&event.alias).cloned() else {
             return;
@@ -281,14 +297,26 @@ impl Orchestrator {
             }
 
             JobStatus::Running => {
-                // (prev: timeout, current: Running) => Only possibilty: Timed out stopping
-                if previous_status == JobStatus::TimedOut {
-                    // Return timeout here so in next timeout event is known that
-                    // job wasn't stopped
-                    JobStatus::TimedOut
-                } else {
-                    self.remove_watched_timeout(&event.alias);
-                    event.status
+                match previous_status {
+                    JobStatus::Free | JobStatus::Created | JobStatus::Running => event.status,
+                    JobStatus::Stopping => {
+                        // If it is stopping it is comming from timeout
+                        JobStatus::TimedOut
+                    }
+                    JobStatus::Starting | JobStatus::Finished(_) => {
+                        eprintln!("[{}] Starting...", event.alias);
+                        // Watched to starting, wait the timeout to set the job as healthy
+                        self.set_watched_status(&event.alias, JobStatus::Starting)
+                            .inspect_err(|err| eprintln!("Error setting watched status: {err}"))
+                            .ok();
+                        JobStatus::Running
+                    }
+                    JobStatus::TimedOut => {
+                        // If cames from timeout, means that the health startup
+                        // time has successfully completed
+                        eprintln!("[{}] Healthy ✅", event.alias);
+                        JobStatus::Running
+                    }
                 }
             }
 
@@ -296,10 +324,8 @@ impl Orchestrator {
                 // First remove the watched job
                 self.remove_watched(&event.alias);
 
-                // TODO: Check for health check, timeout can only happen on stop?
-                // we can make for health check to timeout and then check running.
-                // But in finished a timeout can only mean previous stop try.
-                if previous_status == JobStatus::TimedOut {
+                // If job was stopping just end
+                if previous_status == JobStatus::Stopping {
                     break 'finished event.status;
                 }
 
@@ -349,8 +375,13 @@ impl Orchestrator {
 
             JobStatus::TimedOut => {
                 match previous_status {
+                    JobStatus::Running | JobStatus::Starting => {
+                        // If it comes from running it means it is healthy now
+                        self.remove_watched_timeout(&event.alias);
+                        JobStatus::TimedOut
+                    }
                     JobStatus::TimedOut | JobStatus::Stopping => {
-                        // If job (not watched job) is in time out status, it means that
+                        // If job (not watched job) is in stopping status, it means that
                         // we previously tried to stop or kill it
                         if let Err(err) = self.kill_job(
                             &event.alias,
@@ -359,19 +390,10 @@ impl Orchestrator {
                         ) {
                             eprintln!("Error: Kill job: {err}");
                         };
+                        JobStatus::Stopping
                     }
-                    _ => {
-                        // Gracefully stop
-                        if let Err(err) = self.kill_job(
-                            &event.alias,
-                            service.stop_signal,
-                            Duration::from_secs(service.stop_wait),
-                        ) {
-                            eprintln!("Error: Couldn't stop job gracefully: {err}");
-                        };
-                    }
+                    _ => JobStatus::TimedOut,
                 }
-                event.status
             }
         };
 
