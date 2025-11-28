@@ -1,15 +1,21 @@
 mod config;
+mod events;
+mod jobs;
+mod orchestrate;
 mod service;
+mod watcher;
 
 use config::Config;
+use orchestrate::{Orchestrator, OrchestratorRequest};
 use serde::Deserialize;
-use service::{ServiceAction, Services};
+use service::Services;
 use std::{
     error::Error,
     io::Write,
     net::{TcpListener, TcpStream},
-    sync::{Arc, Mutex},
+    sync::mpsc,
     thread::{self},
+    time::Duration,
 };
 use taskmeister::{dir_utils, Request, Response, ResponsePart};
 
@@ -33,14 +39,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.server_addr = a.parse()?;
     }
 
-    let services = Arc::new(Mutex::new(Services::load(config.get_includes())?));
-    let listen_sock: TcpListener = TcpListener::bind(config.server_addr)?;
-    let config = Arc::new(Mutex::new(config));
+    let (orchestrator, requests_tx) = Orchestrator::new(Services::load(config.get_includes())?);
 
+    thread::spawn(move || {
+        orchestrator.orchestrate();
+    });
+
+    let listen_sock: TcpListener = TcpListener::bind(config.server_addr)?;
     loop {
         let sock_read: TcpStream = listen_sock.accept()?.0;
-        let config = Arc::clone(&config);
-        let services = Arc::clone(&services);
+        let requests_tx = requests_tx.clone();
 
         let handle = thread::spawn(move || -> std::io::Result<()> {
             println!("entering thread");
@@ -53,31 +61,37 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let res: Response = process_request(&req);
                 sock_write.write(serde_json::to_string(&res)?.as_bytes())?;
 
-                let mut srv = services.lock().unwrap();
-                let conf = config.lock().unwrap();
+                // START
+                let (cli_tx, cli_rx) = mpsc::channel();
+                requests_tx
+                    .send(orchestrate::OrchestratorMsg::Request(OrchestratorRequest {
+                        action: service::ServiceAction::Start("ls1".to_string()),
+                        response_channel: cli_tx,
+                    }))
+                    .inspect_err(|err| eprintln!("Error sending request to orchestrator! {err:?}"))
+                    .ok();
 
-                let up = match Services::load(conf.get_includes()) {
-                    Ok(inc) => srv.update(inc),
-                    Err(e) => {
-                        println!("Error loading includes: {e}");
-                        continue;
-                    }
-                };
-
-                for u in up {
-                    match &u {
-                        ServiceAction::Start(a) => println!("Start:\n{:#?}", srv.get(a).unwrap()),
-                        ServiceAction::Restart(a) => {
-                            println!("Reload:\n{:#?}", srv.get(a).unwrap())
-                        }
-                        ServiceAction::Stop(a) => {
-                            println!("Stop:\n{:#?}", srv.get(a).unwrap());
-                            // For now just remove the service
-                            srv.stop(a);
-                            srv.remove(a);
-                        }
-                    }
+                for resp in cli_rx {
+                    println!("Received Orchestrator response:\n{resp:?}");
+                    break;
                 }
+
+                thread::sleep(Duration::from_secs(1));
+
+                // STOP
+                // let (cli_tx, cli_rx) = mpsc::channel();
+                // requests_tx
+                //     .send(jobs::OrchestratorMsg::Request(OrchestratorRequest {
+                //         action: service::ServiceAction::Stop("ls1".to_string()),
+                //         response_channel: cli_tx,
+                //     }))
+                //     .inspect_err(|err| eprintln!("Error sending request to orchestrator! {err:?}"))
+                //     .ok();
+
+                // for resp in cli_rx {
+                //     println!("Received Orchestrator response:\n{resp:?}");
+                //     break;
+                // }
             }
         });
 
