@@ -1,10 +1,12 @@
 mod config;
+mod events;
 mod jobs;
+mod orchestrate;
 mod service;
 mod watcher;
 
 use config::Config;
-use jobs::{Orchestrator, OrchestratorRequest};
+use orchestrate::{Orchestrator, OrchestratorRequest};
 use serde::Deserialize;
 use service::Services;
 use std::{
@@ -62,7 +64,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // START
                 let (cli_tx, cli_rx) = mpsc::channel();
                 requests_tx
-                    .send(jobs::OrchestratorMsg::Request(OrchestratorRequest {
+                    .send(orchestrate::OrchestratorMsg::Request(OrchestratorRequest {
                         action: service::ServiceAction::Start("ls1".to_string()),
                         response_channel: cli_tx,
                     }))

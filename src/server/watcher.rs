@@ -7,13 +7,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::jobs::{JobStatus, OrchestratorMsg};
-
-#[derive(Debug)]
-pub struct JobEvent {
-    pub alias: String,
-    pub status: JobStatus,
-}
+use crate::events::JobEvent;
+use crate::jobs::JobStatus;
+use crate::orchestrate::OrchestratorMsg;
 
 #[derive(Debug)]
 pub struct WatchedTimeout {
@@ -42,14 +38,14 @@ impl WatchedTimeout {
 }
 
 #[derive(Debug)]
-pub struct WatchedJob {
+pub struct Watched {
     pub process: Child,
     pub timeout: WatchedTimeout,
     pub previous_status: JobStatus,
 }
 
 pub fn watch(
-    watched_jobs: Arc<Mutex<HashMap<String, Vec<WatchedJob>>>>,
+    watched_jobs: Arc<Mutex<HashMap<String, Vec<Watched>>>>,
     tx_events: Sender<OrchestratorMsg>,
     period: Duration,
 ) {
