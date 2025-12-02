@@ -40,6 +40,7 @@ fn timestamp() -> String {
         return "[Time Overflow]".to_string();
     };
 
+    // day/month/year in civil time
     let era = days / DAYS_IN_ERA;
     let day_of_era = days - era * DAYS_IN_ERA;
     let year_of_era =
@@ -54,5 +55,19 @@ fn timestamp() -> String {
         month_non_civil - 9
     };
 
-    format!("[{}/{}/{}]", day, month, year + (month <= 2) as u64)
+    // hour/minute/second in UTC
+    let seconds_today = now.as_secs() % SECS_IN_DAY;
+    let hour = seconds_today / 3600;
+    let minute = (seconds_today - (hour * 3600)) / 60;
+    let second = seconds_today - (hour * 3600) - (minute * 60);
+
+    format!(
+        "[{}/{}/{} {}:{}:{} UTC]",
+        day,
+        month,
+        year + (month <= 2) as u64,
+        hour,
+        minute,
+        second
+    )
 }
