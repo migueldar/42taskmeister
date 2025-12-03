@@ -1,7 +1,14 @@
 use std::{
     io::{self, IsTerminal},
-    time::{self, SystemTime},
+    time::SystemTime,
 };
+
+#[macro_export]
+macro_rules! info {
+    ($($arg:tt)*) => {
+        Logger::new().log(LogLevel::Info, &format!($($arg)*))
+    };
+}
 
 const SECS_IN_DAY: u64 = 86400;
 const DAYS_IN_ERA: u64 = 146097;
@@ -13,19 +20,25 @@ pub enum LogLevel {
 }
 
 pub struct Logger {
-    level: LogLevel,
     is_term: bool,
 }
 
 impl Logger {
-    pub fn new(level: LogLevel) -> Logger {
+    pub fn new() -> Logger {
         Logger {
-            level: level,
             is_term: io::stdout().is_terminal(),
         }
     }
-    pub fn println_info(&self) {
-        println!("{}", timestamp())
+    pub fn log(&self, level: LogLevel, msg: &str) {
+        let mut prefix = timestamp();
+
+        prefix.push_str(match level {
+            LogLevel::Info => " [INFO]",
+            LogLevel::Warning => " [WARN]",
+            LogLevel::Error => " [ERROR]",
+        });
+
+        println!("{}: {}", prefix, msg)
     }
 }
 

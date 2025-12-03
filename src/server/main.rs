@@ -1,13 +1,12 @@
 mod config;
 mod events;
 mod jobs;
-mod log;
 mod orchestrate;
 mod service;
 mod watcher;
 
 use config::Config;
-use log::{LogLevel, Logger};
+use logger::{LogLevel, Logger};
 use orchestrate::{Orchestrator, OrchestratorRequest};
 use serde::Deserialize;
 use service::Services;
@@ -34,8 +33,7 @@ fn process_request(req: &Request) -> Response {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let log = Logger::new(LogLevel::Info);
-    log.println_info();
+    logger::info!("cosa {}", 23);
 
     let (cfg_path, args) = dir_utils::parse_config_path();
     let mut config = Config::load(cfg_path)?;
