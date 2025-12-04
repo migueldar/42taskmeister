@@ -15,14 +15,17 @@ macro_rules! info {
 const SECS_IN_DAY: u64 = 86400;
 const DAYS_IN_ERA: u64 = 146097;
 
+// This works since:
+// https://doc.rust-lang.org/stable/std/cmp/trait.PartialOrd.html#derivable
+#[derive(Ord, PartialOrd, Eq, PartialEq)]
 pub enum LogLevel {
-    Info,
-    Warning,
     Error,
+    Warning,
+    Info,
 }
 
 pub struct Logger {
-    level: LogLevel,
+    level: LogLevel, // Level of logs Error > Warn > Info
     syslog: bool,
     is_term: bool,
 }
@@ -44,19 +47,23 @@ impl Logger {
     pub fn log(&self, level: LogLevel, msg: &str) {
         let timestamp = timestamp();
 
-        let (level, posix_level) = match level {
-            LogLevel::Info => (" [INFO]", libc::LOG_INFO),
-            LogLevel::Warning => (" [WARN]", libc::LOG_WARNING),
-            LogLevel::Error => (" [ERROR]", libc::LOG_ERR),
+        let (prefix, posix_level) = match level {
+            LogLevel::Info => ("[INFO]", libc::LOG_INFO),
+            LogLevel::Warning => ("[WARN]", libc::LOG_WARNING),
+            LogLevel::Error => ("[ERROR]", libc::LOG_ERR),
         };
 
         if self.syslog {
+            // In syslog we always log no matter the level
             unsafe {
                 libc::syslog(posix_level, msg.as_ptr() as *const libc::c_char);
             }
         }
 
-        println!("{} {}: {}", timestamp, level, msg)
+        // Only log levels with lesser or equal severity as configured
+        if level <= self.level {
+            println!("{} {}: {}", timestamp, prefix, msg)
+        }
     }
 }
 
