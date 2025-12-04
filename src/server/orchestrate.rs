@@ -2,8 +2,8 @@ use std::{
     collections::HashMap,
     fmt, io,
     sync::{
-        mpsc::{self, Receiver, Sender},
         Arc, Mutex,
+        mpsc::{self, Receiver, Sender},
     },
     thread,
     time::Duration,
@@ -142,7 +142,9 @@ impl Orchestrator {
                 Ok(res) => {
                     if let Some(old_watched_jobs) = res {
                         // TODO: Do something with old jobs in this case?
-                        eprintln!("Warning: Started new jobs but old where not cleaned up from the watcher: {old_watched_jobs:?}");
+                        eprintln!(
+                            "Warning: Started new jobs but old where not cleaned up from the watcher: {old_watched_jobs:?}"
+                        );
                     }
 
                     Ok(())

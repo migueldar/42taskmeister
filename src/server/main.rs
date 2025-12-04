@@ -18,7 +18,7 @@ use std::{
     thread::{self},
     time::Duration,
 };
-use taskmeister::{dir_utils, Request, Response, ResponsePart};
+use taskmeister::{Request, Response, ResponsePart, dir_utils};
 
 // this is here for client testing purposes
 fn process_request(req: &Request) -> Response {
@@ -33,7 +33,8 @@ fn process_request(req: &Request) -> Response {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    logger::info!("cosa {}", 23);
+    let log = logger::Logger::new(LogLevel::Info, true);
+    logger::info!(log, "cosa {}", 23);
 
     let (cfg_path, args) = dir_utils::parse_config_path();
     let mut config = Config::load(cfg_path)?;

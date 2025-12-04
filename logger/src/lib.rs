@@ -3,10 +3,12 @@ use std::{
     time::SystemTime,
 };
 
+use libc;
+
 #[macro_export]
 macro_rules! info {
-    ($($arg:tt)*) => {
-        Logger::new().log(LogLevel::Info, &format!($($arg)*))
+    ($logger:expr, $($arg:tt)*) => {
+        $logger.log(LogLevel::Info, &format!($($arg)*))
     };
 }
 
@@ -20,25 +22,51 @@ pub enum LogLevel {
 }
 
 pub struct Logger {
+    level: LogLevel,
+    syslog: bool,
     is_term: bool,
 }
 
 impl Logger {
-    pub fn new() -> Logger {
+    pub fn new(level: LogLevel, syslog: bool) -> Logger {
+        if syslog {
+            unsafe {
+                libc::openlog(c"taskmaker".as_ptr(), libc::LOG_CONS, libc::LOG_USER);
+            }
+        }
+
         Logger {
+            level,
+            syslog,
             is_term: io::stdout().is_terminal(),
         }
     }
     pub fn log(&self, level: LogLevel, msg: &str) {
-        let mut prefix = timestamp();
+        let timestamp = timestamp();
 
-        prefix.push_str(match level {
-            LogLevel::Info => " [INFO]",
-            LogLevel::Warning => " [WARN]",
-            LogLevel::Error => " [ERROR]",
-        });
+        let (level, posix_level) = match level {
+            LogLevel::Info => (" [INFO]", libc::LOG_INFO),
+            LogLevel::Warning => (" [WARN]", libc::LOG_WARNING),
+            LogLevel::Error => (" [ERROR]", libc::LOG_ERR),
+        };
 
-        println!("{}: {}", prefix, msg)
+        if self.syslog {
+            unsafe {
+                libc::syslog(posix_level, msg.as_ptr() as *const libc::c_char);
+            }
+        }
+
+        println!("{} {}: {}", timestamp, level, msg)
+    }
+}
+
+impl Drop for Logger {
+    fn drop(&mut self) {
+        if self.syslog {
+            unsafe {
+                libc::closelog();
+            }
+        }
     }
 }
 

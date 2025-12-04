@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io,
     process::{Child, ExitStatus},
-    sync::{mpsc::Sender, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc::Sender},
     thread,
     time::{Duration, Instant},
 };
