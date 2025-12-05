@@ -1,5 +1,9 @@
 use std::{
-    io::{self, IsTerminal},
+    fs::File,
+    io::{self, Write},
+    path::PathBuf,
+    sync::mpsc::{self, Receiver, Sender},
+    thread,
     time::SystemTime,
 };
 
@@ -8,7 +12,19 @@ use libc;
 #[macro_export]
 macro_rules! info {
     ($logger:expr, $($arg:tt)*) => {
-        $logger.log(LogLevel::Info, &format!($($arg)*))
+        $logger.send(LogLevel::Info, format!($($arg)*))
+    };
+}
+#[macro_export]
+macro_rules! warn {
+    ($logger:expr, $($arg:tt)*) => {
+        $logger.send(LogLevel::Warning, format!($($arg)*))
+    };
+}
+#[macro_export]
+macro_rules! error {
+    ($logger:expr, $($arg:tt)*) => {
+        $logger.send(LogLevel::Error, format!($($arg)*))
     };
 }
 
@@ -24,27 +40,50 @@ pub enum LogLevel {
     Info,
 }
 
+struct Log {
+    level: LogLevel,
+    msg: String,
+}
+
+#[derive(Clone)]
 pub struct Logger {
-    level: LogLevel, // Level of logs Error > Warn > Info
+    tx: Sender<Log>,
     syslog: bool,
-    is_term: bool,
 }
 
 impl Logger {
-    pub fn new(level: LogLevel, syslog: bool) -> Logger {
+    pub fn new(level: LogLevel, logs_path: Option<PathBuf>, syslog: bool) -> io::Result<Self> {
+        let mut file = None;
+
         if syslog {
             unsafe {
                 libc::openlog(c"taskmaker".as_ptr(), libc::LOG_CONS, libc::LOG_USER);
             }
         }
 
-        Logger {
-            level,
-            syslog,
-            is_term: io::stdout().is_terminal(),
+        if let Some(logs_path) = logs_path {
+            file = Some(File::options().create(true).append(true).open(logs_path)?);
         }
+
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            log_loop(rx, level, file, syslog);
+        });
+
+        Ok(Logger { tx, syslog })
     }
-    pub fn log(&self, level: LogLevel, msg: &str) {
+
+    pub fn send(&self, level: LogLevel, msg: String) {
+        self.tx
+            .send(Log { level, msg })
+            .inspect_err(|err| eprintln!("Error: Sending to logger channel: {err}"))
+            .ok();
+    }
+}
+
+fn log_loop(rx: Receiver<Log>, level: LogLevel, mut file: Option<File>, syslog: bool) {
+    for log in rx {
         let timestamp = timestamp();
 
         let (prefix, posix_level) = match level {
@@ -53,16 +92,23 @@ impl Logger {
             LogLevel::Error => ("[ERROR]", libc::LOG_ERR),
         };
 
-        if self.syslog {
+        if syslog {
             // In syslog we always log no matter the level
             unsafe {
-                libc::syslog(posix_level, msg.as_ptr() as *const libc::c_char);
+                libc::syslog(posix_level, log.msg.as_ptr() as *const libc::c_char);
             }
         }
 
-        // Only log levels with lesser or equal severity as configured
-        if level <= self.level {
-            println!("{} {}: {}", timestamp, prefix, msg)
+        // Only log levels with higher or equal severity as configured
+        if log.level <= level {
+            let log_msg = format!("{} {}: {}", timestamp, prefix, log.msg);
+            println!("{log_msg}");
+
+            if let Some(file) = &mut file {
+                writeln!(file, "{log_msg}")
+                    .inspect_err(|err| eprintln!("Error: {err}"))
+                    .ok();
+            }
         }
     }
 }

@@ -7,6 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use logger::{LogLevel, Logger};
+
 use crate::events::JobEvent;
 use crate::jobs::JobStatus;
 use crate::orchestrate::OrchestratorMsg;
@@ -48,6 +50,7 @@ pub fn watch(
     watched_jobs: Arc<Mutex<HashMap<String, Vec<Watched>>>>,
     tx_events: Sender<OrchestratorMsg>,
     period: Duration,
+    logger: Logger,
 ) {
     loop {
         for (alias, jobs) in watched_jobs.lock().unwrap().iter_mut() {
@@ -56,7 +59,7 @@ pub fn watch(
                     alias: alias.clone(),
                     status: event,
                 })) {
-                    eprintln!("Watcher send event error: {e}");
+                    logger::error!(logger, "Watcher send event: {e}");
                 }
             };
 

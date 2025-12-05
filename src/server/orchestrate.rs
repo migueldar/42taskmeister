@@ -9,6 +9,8 @@ use std::{
     time::Duration,
 };
 
+use logger::{LogLevel, Logger};
+
 use crate::{
     events::JobEvent,
     jobs::{Job, JobStatus},
@@ -45,6 +47,7 @@ pub enum OrchestratorMsg {
 
 pub struct Orchestrator {
     services: Services,
+    pub logger: Logger,
     pub jobs: HashMap<String, Job>,
     pub watched: Arc<Mutex<HashMap<String, Vec<Watched>>>>,
     messages_tx: Sender<OrchestratorMsg>,
@@ -52,12 +55,13 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
-    pub fn new(services: Services) -> (Orchestrator, Sender<OrchestratorMsg>) {
+    pub fn new(services: Services, logger: Logger) -> (Orchestrator, Sender<OrchestratorMsg>) {
         let (tx, rx) = mpsc::channel();
 
         (
             Orchestrator {
-                services: services,
+                services,
+                logger,
                 jobs: HashMap::new(),
                 watched: Arc::new(Mutex::new(HashMap::new())),
                 messages_tx: tx.clone(),
@@ -142,8 +146,9 @@ impl Orchestrator {
                 Ok(res) => {
                     if let Some(old_watched_jobs) = res {
                         // TODO: Do something with old jobs in this case?
-                        eprintln!(
-                            "Warning: Started new jobs but old where not cleaned up from the watcher: {old_watched_jobs:?}"
+                        logger::warn!(
+                            self.logger,
+                            "Started new jobs but old where not cleaned up from the watcher: {old_watched_jobs:?}"
                         );
                     }
 
@@ -192,9 +197,15 @@ impl Orchestrator {
     pub fn orchestrate(mut self) {
         let watched_jobs_thread = Arc::clone(&self.watched);
         let tx_events = self.messages_tx.clone();
+        let wlogger = self.logger.clone();
 
         thread::spawn(move || {
-            watcher::watch(watched_jobs_thread, tx_events, Duration::from_millis(100));
+            watcher::watch(
+                watched_jobs_thread,
+                tx_events,
+                Duration::from_millis(100),
+                wlogger,
+            );
         });
 
         // NOTE: By design orchestrate is only working with one sigle channel of requests.
@@ -216,7 +227,9 @@ impl Orchestrator {
                     request
                         .response_channel
                         .send(result)
-                        .inspect_err(|err| eprintln!("Error: Sending response to client: {err:?}"))
+                        .inspect_err(|err| {
+                            logger::error!(self.logger, "Sending response to client: {err:?}")
+                        })
                         .ok();
                 }
                 OrchestratorMsg::Event(event) => self.manage_event(event),

@@ -2,9 +2,9 @@
 // module, but it is indeed the orchestrator and can not be splitted without having
 // orchestrator depeendencies.use std::time::Duration;
 
-use std::time::Duration;
-
 use crate::{jobs::JobStatus, orchestrate::Orchestrator, service::RestartOptions};
+use logger::LogLevel;
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct JobEvent {
@@ -14,7 +14,7 @@ pub struct JobEvent {
 
 impl Orchestrator {
     pub fn manage_event(&mut self, event: JobEvent) {
-        eprintln!("[Event] [{}] {:?}", event.alias, event.status);
+        logger::info!(self.logger, "[Event] [{}] {:?}", event.alias, event.status);
 
         let Some(service) = self.get_services().get(&event.alias).cloned() else {
             return;
@@ -34,10 +34,12 @@ impl Orchestrator {
                     }
                     JobStatus::Stopping => JobStatus::Stopping,
                     JobStatus::Starting => {
-                        eprintln!("[{}] Starting...", event.alias);
+                        logger::info!(self.logger, "[{}] Starting...", event.alias);
                         // Watched to starting, wait the timeout to set the job as healthy
                         self.set_watched_status(&event.alias, JobStatus::Running(false))
-                            .inspect_err(|err| eprintln!("Error setting watched status: {err}"))
+                            .inspect_err(|err| {
+                                logger::error!(self.logger, "Error setting watched status: {err}")
+                            })
                             .ok();
                         JobStatus::Running(false)
                     }
@@ -45,7 +47,7 @@ impl Orchestrator {
                     JobStatus::TimedOut => {
                         // If cames from timeout, means that the health startup
                         // time has successfully completed
-                        eprintln!("[{}] Healthy ✅", event.alias);
+                        logger::info!(self.logger, "[{}] Healthy ✅", event.alias);
                         JobStatus::Running(true)
                     }
                 }
@@ -71,13 +73,18 @@ impl Orchestrator {
                                 break 'status match self.start_job(&event.alias) {
                                     Ok(_) => JobStatus::Starting,
                                     Err(err) => {
-                                        eprintln!("Error restarting {}: {}", &event.alias, err);
+                                        logger::error!(
+                                            self.logger,
+                                            "Error restarting {}: {}",
+                                            &event.alias,
+                                            err
+                                        );
                                         event.status
                                     }
                                 };
                             }
                         }
-                        eprintln!("[{}] Exhausted retries", &event.alias);
+                        logger::info!(self.logger, "[{}] Exhausted retries", &event.alias);
                         event.status
                     }
 
@@ -89,7 +96,12 @@ impl Orchestrator {
                                     break 'status match self.start_job(&event.alias) {
                                         Ok(_) => JobStatus::Starting,
                                         Err(err) => {
-                                            eprintln!("Error restarting {}: {}", &event.alias, err);
+                                            logger::error!(
+                                                self.logger,
+                                                "Error restarting {}: {}",
+                                                &event.alias,
+                                                err
+                                            );
                                             event.status
                                         }
                                     };
@@ -98,7 +110,7 @@ impl Orchestrator {
                                 break 'status event.status;
                             }
                         }
-                        eprintln!("[{}] Exhausted retries", &event.alias);
+                        logger::info!(self.logger, "[{}] Exhausted retries", &event.alias);
                         event.status
                     }
                 }
@@ -119,7 +131,7 @@ impl Orchestrator {
                             libc::SIGKILL,
                             Duration::from_secs(service.stop_wait),
                         ) {
-                            eprintln!("Error: Kill job: {err}");
+                            logger::error!(self.logger, "Error: Kill job: {err}");
                         };
                         JobStatus::Stopping
                     }
