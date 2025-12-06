@@ -1,3 +1,4 @@
+use logger::LogLevel;
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
@@ -15,6 +16,7 @@ pub struct Config {
     pub server_addr: SocketAddrV4,
     pub logs: Option<PathBuf>,
     pub syslog: bool,
+    pub log_level: LogLevel,
     include: Include,
     start: Start,
 }
@@ -58,6 +60,7 @@ impl Config {
                 server_addr: SERVER_ADDR.parse()?,
                 logs: None,
                 syslog: false,
+                log_level: LogLevel::Info,
                 include: Include { paths: Vec::new() },
                 start: Start {
                     services: Vec::new(),

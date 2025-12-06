@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (cfg_path, args) = dir_utils::parse_config_path();
     let mut config = Config::load(cfg_path)?;
 
-    let logger = Logger::new(LogLevel::Info, config.logs.clone(), config.syslog)?;
+    let logger = Logger::new(config.log_level.clone(), config.logs.clone(), config.syslog)?;
 
     if let Some(arg) = args {
         config.server_addr = arg.parse()?;

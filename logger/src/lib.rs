@@ -1,3 +1,5 @@
+use libc;
+use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
     io::{self, Write},
@@ -6,8 +8,6 @@ use std::{
     thread,
     time::SystemTime,
 };
-
-use libc;
 
 #[macro_export]
 macro_rules! info {
@@ -33,7 +33,7 @@ const DAYS_IN_ERA: u64 = 146097;
 
 // This works since:
 // https://doc.rust-lang.org/stable/std/cmp/trait.PartialOrd.html#derivable
-#[derive(Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Debug, Clone)]
 pub enum LogLevel {
     Error,
     Warning,
