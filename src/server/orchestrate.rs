@@ -21,6 +21,7 @@ use crate::{
 #[derive(Debug)]
 pub enum OrchestratorError {
     ServiceNotFound,
+    ServiceUpdate,
     ServiceStopped,
     ServiceAlreadyStarted,
     ServiceAlreadyStopping,
@@ -118,9 +119,9 @@ impl Orchestrator {
     }
 
     // #################### REQUESTS ####################
-    fn start_request(&mut self, alias: String) -> Result<(), OrchestratorError> {
+    fn start_request(&mut self, alias: &str) -> Result<(), OrchestratorError> {
         // Get or create a new job
-        let job = self.create_job(&alias)?;
+        let job = self.create_job(alias)?;
 
         // Only finished, created and Free are considered valid states to start a job
         let mut response = match job.status {
@@ -142,7 +143,7 @@ impl Orchestrator {
 
         // If response is positive, start the job
         if let Ok(_) = response {
-            response = match self.start_job(&alias) {
+            response = match self.start_job(alias) {
                 Ok(res) => {
                     if let Some(old_watched_jobs) = res {
                         // TODO: Do something with old jobs in this case?
@@ -161,11 +162,11 @@ impl Orchestrator {
         response
     }
 
-    fn stop_request(&mut self, alias: String) -> Result<(), OrchestratorError> {
+    fn stop_request(&mut self, alias: &str) -> Result<(), OrchestratorError> {
         // Get the job
         let job = self
             .jobs
-            .get_mut(&alias)
+            .get_mut(alias)
             .ok_or(OrchestratorError::JobNotFound)?;
 
         // Only starting and Running are considered valid states to stop a job
@@ -203,7 +204,7 @@ impl Orchestrator {
             watcher::watch(
                 watched_jobs_thread,
                 tx_events,
-                Duration::from_millis(100),
+                Duration::from_millis(2000),
                 wlogger,
             );
         });
@@ -219,16 +220,38 @@ impl Orchestrator {
             match message {
                 OrchestratorMsg::Request(request) => {
                     let result = match request.action {
-                        ServiceAction::Start(alias) => self.start_request(alias),
+                        ServiceAction::Start(alias) => self.start_request(&alias),
                         ServiceAction::Restart(_) => todo!(),
-                        ServiceAction::Stop(alias) => self.stop_request(alias),
+                        ServiceAction::Stop(alias) => self.stop_request(&alias),
+                        ServiceAction::Reload => match self.services.update() {
+                            Ok(up_services) => {
+                                let mut res = Ok(());
+                                for service in up_services {
+                                    res = match service {
+                                        ServiceAction::Start(alias) => self.start_request(&alias),
+                                        ServiceAction::Restart(_) => todo!(),
+                                        ServiceAction::Stop(alias) => self.stop_request(&alias),
+                                        _ => Ok(()),
+                                    };
+
+                                    if res.is_err() {
+                                        break;
+                                    }
+                                }
+                                res
+                            }
+                            Err(err) => {
+                                logger::error!(self.logger, "Updating services: {err}");
+                                Err(OrchestratorError::ServiceUpdate)
+                            }
+                        },
                     };
 
                     request
                         .response_channel
                         .send(result)
                         .inspect_err(|err| {
-                            logger::error!(self.logger, "Sending response to client: {err:?}")
+                            logger::error!(self.logger, "Sending response to client: {err}")
                         })
                         .ok();
                 }
