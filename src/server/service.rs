@@ -45,13 +45,16 @@ pub struct Service {
 
 // Cannot implement methods of foreign types, use struct wrapper to abstract it
 #[derive(Debug)]
-pub struct Services(HashMap<String, Service>);
+pub struct Services {
+    paths: Vec<PathBuf>,
+    services: HashMap<String, Service>,
+}
 
 impl Services {
-    pub fn load(paths: &Vec<PathBuf>) -> Result<Services, io::Error> {
-        let mut servs: HashMap<String, Service> = HashMap::new();
+    pub fn load(paths: Vec<PathBuf>) -> Result<Services, io::Error> {
+        let mut services: HashMap<String, Service> = HashMap::new();
 
-        for p in paths {
+        for p in &paths {
             let p = dir_utils::expand_home_dir(p);
             dir_utils::walk_dir(p, &mut |closure_p| {
                 let Ok(s) = toml::from_str::<Service>(&fs::read_to_string(&closure_p)?) else {
@@ -61,7 +64,7 @@ impl Services {
                     )));
                 };
 
-                match servs.entry(s.alias.clone()) {
+                match services.entry(s.alias.clone()) {
                     Entry::Occupied(o) => {
                         return Err(io::Error::other(format!(
                             "Alias {} redefined in: {}",
@@ -76,7 +79,7 @@ impl Services {
                 }
             })?;
         }
-        Ok(Services(servs))
+        Ok(Services { paths, services })
     }
 
     /// Update current Services with the new structure: new becomes the new services
@@ -84,14 +87,14 @@ impl Services {
     pub fn update(&mut self, mut new: Services) -> Vec<ServiceAction> {
         let mut up = vec![];
 
-        for (alias, serv) in &new.0 {
-            match self.0.entry(alias.clone()) {
+        for (alias, serv) in &new.services {
+            match self.services.entry(alias.clone()) {
                 Entry::Occupied(o) => {
                     // If self contains the entry, check if it changed
                     if *o.get() != *serv {
                         up.push(ServiceAction::Restart(alias.clone()));
                     }
-                    self.0.remove(alias);
+                    self.services.remove(alias);
                 }
                 Entry::Vacant(_) => up.push(ServiceAction::Start(alias.clone())),
             };
@@ -99,20 +102,20 @@ impl Services {
 
         // Remaining in self are the services to stop
         up.extend(
-            self.0
+            self.services
                 .iter()
                 .map(|(alias, _)| ServiceAction::Stop(alias.clone())),
         );
 
         // Update self with the new entries
-        new.0.extend(self.0.drain());
+        new.services.extend(self.services.drain());
         *self = new;
 
         up
     }
 
     pub fn get(&self, alias: &str) -> Option<&Service> {
-        self.0.get(alias)
+        self.services.get(alias)
     }
 
     pub fn stop(&mut self, alias: &str) {
@@ -120,7 +123,7 @@ impl Services {
     }
 
     pub fn remove(&mut self, alias: &str) -> Option<Service> {
-        self.0.remove(alias)
+        self.services.remove(alias)
     }
 }
 

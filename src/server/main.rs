@@ -42,8 +42,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.server_addr = arg.parse()?;
     }
 
-    let (orchestrator, requests_tx) =
-        Orchestrator::new(Services::load(config.get_includes())?, logger.clone());
+    let (orchestrator, requests_tx) = Orchestrator::new(
+        Services::load(config.get_includes().clone())?,
+        logger.clone(),
+    );
 
     thread::spawn(move || {
         orchestrator.orchestrate();
