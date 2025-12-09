@@ -52,6 +52,10 @@ pub struct Logger {
 }
 
 impl Logger {
+    /// Create a new logger. This function will return a Logger object which contains a channel
+    /// to a loop that will perform the logging. Logs are always written in the standard error.
+    /// Besides that, if a valid logs_path is given logs are also written to a file. And if
+    /// bool variable syslog is true logs are also reported to syslog.
     pub fn new(level: LogLevel, logs_path: Option<PathBuf>, syslog: bool) -> io::Result<Self> {
         let mut file = None;
 
@@ -102,7 +106,7 @@ fn log_loop(rx: Receiver<Log>, level: LogLevel, mut file: Option<File>, syslog: 
         // Only log levels with higher or equal severity as configured
         if log.level <= level {
             let log_msg = format!("{} {}: {}", timestamp, prefix, log.msg);
-            println!("{log_msg}");
+            eprintln!("{log_msg}");
 
             if let Some(file) = &mut file {
                 writeln!(file, "{log_msg}")
