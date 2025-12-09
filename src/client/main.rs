@@ -1,14 +1,14 @@
 mod config;
 
 use config::Config;
-use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 use serde::Deserialize;
 use std::error::Error;
 use std::io::Write;
 use std::net::TcpStream;
 use std::process;
-use taskmeister::{dir_utils, Request, Response, ResponsePart};
+use taskmeister::{Request, Response, ResponsePart, dir_utils};
 
 #[derive(Copy, Clone)]
 enum ExitCodes {

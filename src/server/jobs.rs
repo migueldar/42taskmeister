@@ -3,6 +3,7 @@
 // orchestrator depeendencies.
 
 use libc;
+use logger::LogLevel;
 use std::{io, time::Duration};
 
 use crate::{
@@ -45,7 +46,7 @@ impl Orchestrator {
             .cloned()
             .ok_or(OrchestratorError::ServiceNotFound)?;
 
-        eprintln!("[{}] Starting", alias);
+        logger::info!(self.logger, "[{}] Starting", alias);
         // Add handler to the watched jobs
         let mut watched = self.watched.lock().unwrap();
         Ok(watched.insert(
@@ -82,7 +83,7 @@ impl Orchestrator {
         signal: i32,
         timeout: Duration,
     ) -> Result<(), OrchestratorError> {
-        eprintln!("[{}] Killing({})", alias, signal);
+        logger::info!(self.logger, "[{}] Killing({})", alias, signal);
 
         // Get all the jobs id
         let job_pids: Vec<u32> = self

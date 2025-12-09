@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+logger = {path = "./logger"}
 libc = "0.2.177"
 rustyline = "17.0.2"
 serde = { version = "1.0.228", features = ["derive"]}

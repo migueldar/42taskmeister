@@ -1,3 +1,4 @@
+use logger::LogLevel;
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
@@ -13,7 +14,9 @@ pub struct Config {
     #[serde(skip)]
     config_path: PathBuf,
     pub server_addr: SocketAddrV4,
-    logs: PathBuf,
+    pub logs: Option<PathBuf>,
+    pub syslog: bool,
+    pub log_level: LogLevel,
     include: Include,
     start: Start,
 }
@@ -31,7 +34,6 @@ pub struct Start {
 // Default values
 pub const CONFIG_PATH: &str = "~/.config/taskmeiker/server.toml";
 pub const SERVER_ADDR: &str = "127.0.0.1:14242";
-pub const LOGS_FILE: &str = "~/.config/taskmeiker/logs.txt";
 
 impl Config {
     pub fn load(path: Option<PathBuf>) -> Result<Config, Box<dyn Error>> {
@@ -56,7 +58,9 @@ impl Config {
             let c = Config {
                 config_path: config_file,
                 server_addr: SERVER_ADDR.parse()?,
-                logs: dir_utils::expand_home_dir(Path::new(LOGS_FILE)),
+                logs: None,
+                syslog: false,
+                log_level: LogLevel::Info,
                 include: Include { paths: Vec::new() },
                 start: Start {
                     services: Vec::new(),

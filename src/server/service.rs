@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
     fs::{self, OpenOptions},
     io,
     path::PathBuf,
@@ -116,7 +116,6 @@ impl Services {
     }
 
     pub fn stop(&mut self, alias: &str) {
-        println!("Stopping {alias}");
         todo!()
     }
 
@@ -146,8 +145,6 @@ impl Service {
         };
 
         let mut args = self.cmd.split_ascii_whitespace();
-
-        println!("ARGS: {:#?}", args.clone().collect::<Vec<_>>());
 
         Command::new(
             args.next()
