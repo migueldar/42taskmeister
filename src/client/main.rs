@@ -4,9 +4,12 @@ mod connection;
 
 use argument_parser::ParsedArgumets;
 use config::Config;
-use connection::Connection;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
+use serde::Deserialize;
+use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
+
 use std::error::Error;
 use std::fs::File;
 use std::process;

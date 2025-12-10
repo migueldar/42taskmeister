@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{hash_map::Entry, HashMap},
-    fs, io,
+    collections::{HashMap, hash_map::Entry},
+    fs::{self, OpenOptions},
+    io,
     path::PathBuf,
+    process::{Child, Command, Stdio},
 };
 use taskmeister::dir_utils;
 
@@ -14,25 +16,28 @@ pub enum ServiceAction {
     Stop(String),
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
-#[serde(tag = "type", content = "value")]
-enum RestartOptions {
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
+#[serde(tag = "type", content = "retries")]
+pub enum RestartOptions {
     #[default]
     Never,
     Always(u8),
     OnError(u8),
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 pub struct Service {
     alias: String,
     cmd: String,
     clone: u16,
-    restart: RestartOptions,
-    timeout: u32,
-    stop_signal: u32,
-    stop_wait: u32,
-    // redirect: File,
+    pub restart: RestartOptions,
+    pub start_time: u64,
+    pub stop_signal: i32,
+    pub stop_wait: u64,
+    exit_codes: Vec<i32>,
+    stdout: String,
+    stdin: String,
+    stderr: String,
     variables: Vec<(String, String)>,
     working_dir: PathBuf,
     umask: u16,
@@ -111,11 +116,54 @@ impl Services {
     }
 
     pub fn stop(&mut self, alias: &str) {
-        println!("Stopping {alias}");
         todo!()
     }
 
     pub fn remove(&mut self, alias: &str) -> Option<Service> {
         self.0.remove(alias)
+    }
+}
+
+impl Service {
+    pub fn start(&self) -> Result<Child, io::Error> {
+        let stdout = match self.stdout.as_str() {
+            "stdout" => Stdio::inherit(),
+            "null" => Stdio::null(),
+            o => Stdio::from(OpenOptions::new().create(true).write(true).open(o)?),
+        };
+
+        let stdin = match self.stdin.as_str() {
+            "stdin" => Stdio::inherit(),
+            "null" => Stdio::null(),
+            i => Stdio::from(OpenOptions::new().create(true).read(true).open(i)?),
+        };
+
+        let stderr = match self.stderr.as_str() {
+            "stderr" => Stdio::inherit(),
+            "null" => Stdio::null(),
+            o => Stdio::from(OpenOptions::new().create(true).write(true).open(o)?),
+        };
+
+        let mut args = self.cmd.split_ascii_whitespace();
+
+        Command::new(
+            args.next()
+                .ok_or(io::Error::other("No command provided!"))?,
+        )
+        .args(args)
+        .stdout(stdout)
+        .stdin(stdin)
+        .stderr(stderr)
+        .current_dir(&self.working_dir)
+        .spawn()
+    }
+
+    pub fn validate_exit_code(&self, exit_code: i32) -> bool {
+        for code in &self.exit_codes {
+            if exit_code == *code {
+                return true;
+            }
+        }
+        return false;
     }
 }
