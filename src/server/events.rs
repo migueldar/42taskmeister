@@ -59,6 +59,9 @@ impl Orchestrator {
 
                 // If job was stopping just end
                 if previous_status == JobStatus::Stopping {
+                    if self.get_remove_service(&event.alias) {
+                        self.remove_service(&event.alias);
+                    }
                     break 'finished event.status;
                 }
 

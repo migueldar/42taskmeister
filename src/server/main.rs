@@ -72,8 +72,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let action = if sentinel % 2 == 0 {
                     ServiceAction::Start("ls1".to_string())
                 } else {
-                    // ServiceAction::Reload
-                    ServiceAction::Stop("ls1".to_string())
+                    ServiceAction::Reload
+                    // ServiceAction::Stop("ls1".to_string())
                 };
 
                 sentinel += 1;

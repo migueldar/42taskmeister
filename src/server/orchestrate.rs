@@ -14,7 +14,7 @@ use logger::{LogLevel, Logger};
 use crate::{
     events::JobEvent,
     jobs::{Job, JobStatus},
-    service::{ServiceAction, Services},
+    service::{Service, ServiceAction, Services},
     watcher::{self, Watched},
 };
 
@@ -77,6 +77,12 @@ impl Orchestrator {
         self.jobs.get(alias).map(|job| job.status.clone())
     }
 
+    pub fn get_remove_service(&self, alias: &str) -> bool {
+        self.jobs
+            .get(alias)
+            .is_some_and(|job| job.remove_service == true)
+    }
+
     pub fn inc_job_retries(&mut self, alias: &str) -> Option<u8> {
         self.jobs.get_mut(alias).map(|job| {
             job.retries += 1;
@@ -86,6 +92,10 @@ impl Orchestrator {
 
     pub fn get_services(&self) -> &Services {
         &self.services
+    }
+
+    pub fn remove_service(&mut self, alias: &str) -> Option<Service> {
+        self.services.remove(alias)
     }
 
     pub fn set_watched_status(
@@ -162,7 +172,7 @@ impl Orchestrator {
         response
     }
 
-    fn stop_request(&mut self, alias: &str) -> Result<(), OrchestratorError> {
+    fn stop_request(&mut self, alias: &str, remove_service: bool) -> Result<(), OrchestratorError> {
         // Get the job
         let job = self
             .jobs
@@ -186,6 +196,7 @@ impl Orchestrator {
 
         // Update job
         job.status = JobStatus::Stopping;
+        job.remove_service = remove_service;
 
         // If response is positive, stop the job
         if let Ok(_) = response {
@@ -222,7 +233,7 @@ impl Orchestrator {
                     let result = match request.action {
                         ServiceAction::Start(alias) => self.start_request(&alias),
                         ServiceAction::Restart(_) => todo!(),
-                        ServiceAction::Stop(alias) => self.stop_request(&alias),
+                        ServiceAction::Stop(alias) => self.stop_request(&alias, false),
                         ServiceAction::Reload => match self.services.update() {
                             Ok(up_services) => {
                                 let mut res = Ok(());
@@ -230,7 +241,9 @@ impl Orchestrator {
                                     res = match service {
                                         ServiceAction::Start(alias) => self.start_request(&alias),
                                         ServiceAction::Restart(_) => todo!(),
-                                        ServiceAction::Stop(alias) => self.stop_request(&alias),
+                                        ServiceAction::Stop(alias) => {
+                                            self.stop_request(&alias, true)
+                                        }
                                         _ => Ok(()),
                                     };
 
