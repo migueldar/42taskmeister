@@ -14,7 +14,8 @@ use crate::{
 pub struct Job {
     pub status: JobStatus,
     pub retries: u8,
-    pub last_exit_code: i32, // TODO: Check the need of this
+    pub last_exit_code: i32,  // TODO: Check the need of this
+    pub remove_service: bool, // Flag to remove service once the job finish
 }
 
 #[derive(PartialEq, Clone, Debug)]
@@ -36,6 +37,7 @@ impl Orchestrator {
             status: JobStatus::Created,
             retries: 0,
             last_exit_code: 0,
+            remove_service: false,
         }))
     }
 

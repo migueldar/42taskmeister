@@ -14,6 +14,7 @@ pub enum ServiceAction {
     Start(String),
     Restart(String),
     Stop(String),
+    Reload,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
@@ -45,83 +46,95 @@ pub struct Service {
 
 // Cannot implement methods of foreign types, use struct wrapper to abstract it
 #[derive(Debug)]
-pub struct Services(HashMap<String, Service>);
+pub struct Services {
+    paths: Vec<PathBuf>,
+    services: HashMap<String, Service>,
+}
 
 impl Services {
-    pub fn load(paths: &Vec<PathBuf>) -> Result<Services, io::Error> {
-        let mut servs: HashMap<String, Service> = HashMap::new();
+    pub fn new(paths: Vec<PathBuf>) -> Result<Self, io::Error> {
+        let services = load_services(&paths)?;
 
-        for p in paths {
-            let p = dir_utils::expand_home_dir(p);
-            dir_utils::walk_dir(p, &mut |closure_p| {
-                let Ok(s) = toml::from_str::<Service>(&fs::read_to_string(&closure_p)?) else {
-                    return Err(io::Error::other(format!(
-                        "Couldn't deserialize: {}",
-                        closure_p.display()
-                    )));
-                };
-
-                match servs.entry(s.alias.clone()) {
-                    Entry::Occupied(o) => {
-                        return Err(io::Error::other(format!(
-                            "Alias {} redefined in: {}",
-                            o.key(),
-                            closure_p.display(),
-                        )));
-                    }
-                    Entry::Vacant(v) => {
-                        v.insert(s);
-                        Ok(())
-                    }
-                }
-            })?;
-        }
-        Ok(Services(servs))
+        Ok(Services { paths, services })
     }
 
     /// Update current Services with the new structure: new becomes the new services
     /// and a diff is returned with the services that changed
-    pub fn update(&mut self, mut new: Services) -> Vec<ServiceAction> {
+    pub fn update(&mut self) -> Result<Vec<ServiceAction>, io::Error> {
         let mut up = vec![];
+        let mut new_services = load_services(&self.paths)?;
 
-        for (alias, serv) in &new.0 {
-            match self.0.entry(alias.clone()) {
+        for (alias, serv) in &new_services {
+            match self.services.entry(alias.clone()) {
                 Entry::Occupied(o) => {
                     // If self contains the entry, check if it changed
                     if *o.get() != *serv {
                         up.push(ServiceAction::Restart(alias.clone()));
                     }
-                    self.0.remove(alias);
+                    self.services.remove(alias);
                 }
-                Entry::Vacant(_) => up.push(ServiceAction::Start(alias.clone())),
+                Entry::Vacant(_) => {
+                    // TODO: Check if auto start, makes sense to not
+                    // start new services found automaatically
+                    // up.push(ServiceAction::Start(alias.clone()))
+                    ()
+                }
             };
         }
 
         // Remaining in self are the services to stop
         up.extend(
-            self.0
+            self.services
                 .iter()
                 .map(|(alias, _)| ServiceAction::Stop(alias.clone())),
         );
 
         // Update self with the new entries
-        new.0.extend(self.0.drain());
-        *self = new;
+        new_services.extend(self.services.drain());
+        self.services = new_services;
 
-        up
+        Ok(up)
     }
 
     pub fn get(&self, alias: &str) -> Option<&Service> {
-        self.0.get(alias)
-    }
-
-    pub fn stop(&mut self, alias: &str) {
-        todo!()
+        self.services.get(alias)
     }
 
     pub fn remove(&mut self, alias: &str) -> Option<Service> {
-        self.0.remove(alias)
+        self.services.remove(alias)
     }
+}
+
+fn load_services(paths: &Vec<PathBuf>) -> Result<HashMap<String, Service>, io::Error> {
+    let mut services = HashMap::new();
+
+    for p in paths {
+        let p = dir_utils::expand_home_dir(p);
+        dir_utils::walk_dir(p, &mut |closure_p| {
+            let Ok(s) = toml::from_str::<Service>(&fs::read_to_string(&closure_p)?) else {
+                return Err(io::Error::other(format!(
+                    "Couldn't deserialize: {}",
+                    closure_p.display()
+                )));
+            };
+
+            match services.entry(s.alias.clone()) {
+                Entry::Occupied(o) => {
+                    return Err(io::Error::other(format!(
+                        "Alias {} redefined in: {}",
+                        o.key(),
+                        closure_p.display(),
+                    )));
+                }
+                Entry::Vacant(v) => {
+                    v.insert(s);
+                    Ok(())
+                }
+            }
+        })?;
+    }
+
+    Ok(services)
 }
 
 impl Service {

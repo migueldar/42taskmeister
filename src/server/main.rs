@@ -9,7 +9,7 @@ use config::Config;
 use logger::{LogLevel, Logger};
 use orchestrate::{Orchestrator, OrchestratorRequest};
 use serde::Deserialize;
-use service::Services;
+use service::{ServiceAction, Services};
 use std::{
     error::Error,
     io::Write,
@@ -42,8 +42,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.server_addr = arg.parse()?;
     }
 
-    let (orchestrator, requests_tx) =
-        Orchestrator::new(Services::load(config.get_includes())?, logger.clone());
+    let (orchestrator, requests_tx) = Orchestrator::new(
+        Services::new(config.get_includes().clone())?,
+        logger.clone(),
+    );
 
     thread::spawn(move || {
         orchestrator.orchestrate();
@@ -59,17 +61,28 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut deserializer = serde_json::Deserializer::from_reader(&sock_read);
             let mut sock_write: TcpStream = sock_read.try_clone()?;
 
+            let mut sentinel = 0;
+
             loop {
                 let req = Request::deserialize(&mut deserializer)?;
                 logger::info!(logger, "Request: {:?}", req);
                 let res: Response = process_request(&req);
                 sock_write.write(serde_json::to_string(&res)?.as_bytes())?;
 
+                let action = if sentinel % 2 == 0 {
+                    ServiceAction::Start("ls1".to_string())
+                } else {
+                    ServiceAction::Reload
+                    // ServiceAction::Stop("ls1".to_string())
+                };
+
+                sentinel += 1;
+
                 // START
                 let (cli_tx, cli_rx) = mpsc::channel();
                 requests_tx
                     .send(orchestrate::OrchestratorMsg::Request(OrchestratorRequest {
-                        action: service::ServiceAction::Start("ls1".to_string()),
+                        action,
                         response_channel: cli_tx,
                     }))
                     .inspect_err(|err| {

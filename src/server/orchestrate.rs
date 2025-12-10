@@ -14,13 +14,14 @@ use logger::{LogLevel, Logger};
 use crate::{
     events::JobEvent,
     jobs::{Job, JobStatus},
-    service::{ServiceAction, Services},
+    service::{Service, ServiceAction, Services},
     watcher::{self, Watched},
 };
 
 #[derive(Debug)]
 pub enum OrchestratorError {
     ServiceNotFound,
+    ServiceUpdate,
     ServiceStopped,
     ServiceAlreadyStarted,
     ServiceAlreadyStopping,
@@ -76,6 +77,12 @@ impl Orchestrator {
         self.jobs.get(alias).map(|job| job.status.clone())
     }
 
+    pub fn get_remove_service(&self, alias: &str) -> bool {
+        self.jobs
+            .get(alias)
+            .is_some_and(|job| job.remove_service == true)
+    }
+
     pub fn inc_job_retries(&mut self, alias: &str) -> Option<u8> {
         self.jobs.get_mut(alias).map(|job| {
             job.retries += 1;
@@ -85,6 +92,10 @@ impl Orchestrator {
 
     pub fn get_services(&self) -> &Services {
         &self.services
+    }
+
+    pub fn remove_service(&mut self, alias: &str) -> Option<Service> {
+        self.services.remove(alias)
     }
 
     pub fn set_watched_status(
@@ -118,9 +129,9 @@ impl Orchestrator {
     }
 
     // #################### REQUESTS ####################
-    fn start_request(&mut self, alias: String) -> Result<(), OrchestratorError> {
+    fn start_request(&mut self, alias: &str) -> Result<(), OrchestratorError> {
         // Get or create a new job
-        let job = self.create_job(&alias)?;
+        let job = self.create_job(alias)?;
 
         // Only finished, created and Free are considered valid states to start a job
         let mut response = match job.status {
@@ -142,7 +153,7 @@ impl Orchestrator {
 
         // If response is positive, start the job
         if let Ok(_) = response {
-            response = match self.start_job(&alias) {
+            response = match self.start_job(alias) {
                 Ok(res) => {
                     if let Some(old_watched_jobs) = res {
                         // TODO: Do something with old jobs in this case?
@@ -161,11 +172,11 @@ impl Orchestrator {
         response
     }
 
-    fn stop_request(&mut self, alias: String) -> Result<(), OrchestratorError> {
+    fn stop_request(&mut self, alias: &str, remove_service: bool) -> Result<(), OrchestratorError> {
         // Get the job
         let job = self
             .jobs
-            .get_mut(&alias)
+            .get_mut(alias)
             .ok_or(OrchestratorError::JobNotFound)?;
 
         // Only starting and Running are considered valid states to stop a job
@@ -185,6 +196,7 @@ impl Orchestrator {
 
         // Update job
         job.status = JobStatus::Stopping;
+        job.remove_service = remove_service;
 
         // If response is positive, stop the job
         if let Ok(_) = response {
@@ -203,7 +215,7 @@ impl Orchestrator {
             watcher::watch(
                 watched_jobs_thread,
                 tx_events,
-                Duration::from_millis(100),
+                Duration::from_millis(2000),
                 wlogger,
             );
         });
@@ -219,16 +231,40 @@ impl Orchestrator {
             match message {
                 OrchestratorMsg::Request(request) => {
                     let result = match request.action {
-                        ServiceAction::Start(alias) => self.start_request(alias),
+                        ServiceAction::Start(alias) => self.start_request(&alias),
                         ServiceAction::Restart(_) => todo!(),
-                        ServiceAction::Stop(alias) => self.stop_request(alias),
+                        ServiceAction::Stop(alias) => self.stop_request(&alias, false),
+                        ServiceAction::Reload => match self.services.update() {
+                            Ok(up_services) => {
+                                let mut res = Ok(());
+                                for service in up_services {
+                                    res = match service {
+                                        ServiceAction::Start(alias) => self.start_request(&alias),
+                                        ServiceAction::Restart(_) => todo!(),
+                                        ServiceAction::Stop(alias) => {
+                                            self.stop_request(&alias, true)
+                                        }
+                                        _ => Ok(()),
+                                    };
+
+                                    if res.is_err() {
+                                        break;
+                                    }
+                                }
+                                res
+                            }
+                            Err(err) => {
+                                logger::error!(self.logger, "Updating services: {err}");
+                                Err(OrchestratorError::ServiceUpdate)
+                            }
+                        },
                     };
 
                     request
                         .response_channel
                         .send(result)
                         .inspect_err(|err| {
-                            logger::error!(self.logger, "Sending response to client: {err:?}")
+                            logger::error!(self.logger, "Sending response to client: {err}")
                         })
                         .ok();
                 }
