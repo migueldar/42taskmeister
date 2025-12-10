@@ -27,6 +27,12 @@ pub enum ExitCode {
     OTHERERROR = 3,
 }
 
+impl ExitCode {
+    fn as_i32(&self) -> i32 {
+        return *self as i32;
+    }
+}
+
 fn str_is_spaces(line: &str) -> bool {
     !line.contains(|c: char| !c.is_whitespace())
 }
@@ -55,7 +61,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     if parsed_args.command.is_some() {
         connection.write(&parsed_args.command.unwrap(), &mut exit_code)?;
-        process::exit(exit_code as i32);
+        process::exit(exit_code.as_i32());
     }
 
     let mut rl = DefaultEditor::new()?;
@@ -93,5 +99,5 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     rl.save_history(&config.history_file)?;
-    process::exit(exit_code as i32);
+    process::exit(exit_code.as_i32());
 }

@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr, path::PathBuf};
+use std::{env, error::Error, net::SocketAddr, path::PathBuf};
 
 #[derive(Debug)]
 pub struct ParsedArgumets {
@@ -24,30 +24,17 @@ impl ParsedArgumets {
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
-                "-f" => {
-                    ret.config_file = match args.next() {
-                        Some(file) => Some(PathBuf::from(file)),
-                        None => return Err(()),
-                    }
-                }
-                "-c" => {
-                    ret.command = match args.next() {
-                        Some(command) => Some(command),
-                        None => return Err(()),
-                    }
-                }
+                "-f" => ret.config_file = Some(PathBuf::from(args.next().ok_or(())?)),
+                "-c" => ret.command = Some(args.next().ok_or(())?),
                 "-h" => {
                     ret.help = true;
                     break;
                 }
                 server_addr => {
-                    ret.server_addr = match server_addr.parse() {
-                        Ok(addr) => Some(addr),
-                        Err(err) => {
-                            println!("{}", err);
-                            return Err(());
-                        }
-                    }
+                    ret.server_addr = Some(server_addr.parse().map_err(|err| {
+                        println!("{err}");
+                        ()
+                    })?)
                 }
             }
         }
