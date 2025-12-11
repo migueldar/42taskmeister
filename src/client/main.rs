@@ -4,9 +4,7 @@ mod connection;
 
 use argument_parser::ParsedArgumets;
 use config::Config;
-use rustyline::DefaultEditor;
-use rustyline::error::ReadlineError;
-use serde::Deserialize;
+use connection::Connection;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 

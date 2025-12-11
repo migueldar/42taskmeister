@@ -25,7 +25,6 @@ impl Config {
         path: Option<PathBuf>,
         server_addr: Option<SocketAddr>,
     ) -> Result<Config, Box<dyn Error>> {
-
         let mut config: Config;
         let is_path = path.is_some();
         let config_file = path.unwrap_or(PathBuf::from(dir_utils::expand_home_dir(Path::new(
