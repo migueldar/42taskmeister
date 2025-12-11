@@ -31,7 +31,15 @@ pub enum OrchestratorError {
 
 impl fmt::Display for OrchestratorError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Orchestrator error")
+        match self {
+            OrchestratorError::ServiceNotFound => write!(f, "Service not found"),
+            OrchestratorError::ServiceUpdate => write!(f, "Error while updating services"),
+            OrchestratorError::ServiceStopped => write!(f, "Error stopping service"),
+            OrchestratorError::ServiceAlreadyStarted => write!(f, "Service already started"),
+            OrchestratorError::ServiceAlreadyStopping => write!(f, "Service already stopped"),
+            OrchestratorError::JobNotFound => write!(f, "Job not found"),
+            OrchestratorError::JobIoError(error) => write!(f, "Job I/O error: {}", error),
+        }
     }
 }
 
@@ -148,11 +156,11 @@ impl Orchestrator {
             JobStatus::Created => Ok(()),
         };
 
-        // Update job
-        job.status = JobStatus::Starting;
-
         // If response is positive, start the job
         if let Ok(_) = response {
+            // Update job
+            job.status = JobStatus::Starting;
+
             response = match self.start_job(alias) {
                 Ok(res) => {
                     if let Some(old_watched_jobs) = res {
@@ -194,12 +202,12 @@ impl Orchestrator {
             JobStatus::Created => Err(OrchestratorError::ServiceStopped),
         };
 
-        // Update job
-        job.status = JobStatus::Stopping;
-        job.remove_service = remove_service;
-
         // If response is positive, stop the job
         if let Ok(_) = response {
+            // Update job
+            job.status = JobStatus::Stopping;
+            job.remove_service = remove_service;
+
             response = self.stop_job(&alias);
         };
 

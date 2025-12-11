@@ -124,7 +124,7 @@ impl Orchestrator {
                     JobStatus::Running(_) | JobStatus::Starting => {
                         // If it comes from running it means it is healthy now
                         self.remove_watched_timeout(&event.alias);
-                        JobStatus::TimedOut
+                        JobStatus::Running(true)
                     }
                     JobStatus::TimedOut | JobStatus::Stopping => {
                         // If job (not watched job) is in stopping status, it means that
