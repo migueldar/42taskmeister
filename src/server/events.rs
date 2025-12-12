@@ -24,15 +24,15 @@ impl Orchestrator {
             return;
         };
 
-        let new_status = match event.status {
-            JobStatus::Created | JobStatus::Starting | JobStatus::Stopping => event.status,
+        let (new_status, restart) = match event.status {
+            JobStatus::Created | JobStatus::Starting | JobStatus::Stopping => (event.status, false),
 
             JobStatus::Running(_) => {
                 match previous_status {
                     JobStatus::Created | JobStatus::Finished(_) | JobStatus::Running(_) => {
-                        event.status
+                        (event.status, false)
                     }
-                    JobStatus::Stopping => JobStatus::Stopping,
+                    JobStatus::Stopping => (JobStatus::Stopping, false),
                     JobStatus::Starting => {
                         logger::info!(self.logger, "[{}] Starting...", event.alias);
                         // Watched to starting, wait the timeout to set the job as healthy
@@ -41,14 +41,14 @@ impl Orchestrator {
                                 logger::error!(self.logger, "Error setting watched status: {err}")
                             })
                             .ok();
-                        JobStatus::Running(false)
+                        (JobStatus::Running(false), false)
                     }
 
                     JobStatus::TimedOut => {
                         // If cames from timeout, means that the health startup
                         // time has successfully completed
                         logger::info!(self.logger, "[{}] Healthy ✅", event.alias);
-                        JobStatus::Running(true)
+                        (JobStatus::Running(true), false)
                     }
                 }
             }
@@ -59,36 +59,32 @@ impl Orchestrator {
 
                 // If job was stopping just end
                 if previous_status == JobStatus::Stopping {
-                    if self.get_remove_service(&event.alias) {
+                    let flags = self.consume_job_flags(&event.alias);
+
+                    if flags.remove_service {
                         self.remove_service(&event.alias);
                     }
-                    break 'finished event.status;
+
+                    if flags.restart_job {
+                        break 'finished (event.status, true);
+                    }
+
+                    break 'finished (event.status, false);
                 }
 
                 // Restart if needed
                 match service.restart {
-                    RestartOptions::Never => event.status,
+                    RestartOptions::Never => (event.status, false),
 
                     RestartOptions::Always(retries) => 'status: {
                         if let Some(current_retries) = self.inc_job_retries(&event.alias) {
                             // Restrat if we didn't reach the maximum retries
                             if current_retries < retries {
-                                break 'status match self.start_job(&event.alias) {
-                                    Ok(_) => JobStatus::Starting,
-                                    Err(err) => {
-                                        logger::error!(
-                                            self.logger,
-                                            "Error restarting {}: {}",
-                                            &event.alias,
-                                            err
-                                        );
-                                        event.status
-                                    }
-                                };
+                                break 'status (event.status, true);
                             }
                         }
                         logger::info!(self.logger, "[{}] Exhausted retries", &event.alias);
-                        event.status
+                        (event.status, false)
                     }
 
                     RestartOptions::OnError(retries) => 'status: {
@@ -96,25 +92,14 @@ impl Orchestrator {
                             // Restrat if we didn't reach the maximum retries, and the code is error
                             if !service.validate_exit_code(exit_code) {
                                 if current_retries < retries {
-                                    break 'status match self.start_job(&event.alias) {
-                                        Ok(_) => JobStatus::Starting,
-                                        Err(err) => {
-                                            logger::error!(
-                                                self.logger,
-                                                "Error restarting {}: {}",
-                                                &event.alias,
-                                                err
-                                            );
-                                            event.status
-                                        }
-                                    };
+                                    break 'status (event.status, true);
                                 }
                             } else {
-                                break 'status event.status;
+                                break 'status (event.status, false);
                             }
                         }
                         logger::info!(self.logger, "[{}] Exhausted retries", &event.alias);
-                        event.status
+                        (event.status, false)
                     }
                 }
             }
@@ -124,7 +109,7 @@ impl Orchestrator {
                     JobStatus::Running(_) | JobStatus::Starting => {
                         // If it comes from running it means it is healthy now
                         self.remove_watched_timeout(&event.alias);
-                        JobStatus::Running(true)
+                        (JobStatus::Running(true), false)
                     }
                     JobStatus::TimedOut | JobStatus::Stopping => {
                         // If job (not watched job) is in stopping status, it means that
@@ -134,11 +119,11 @@ impl Orchestrator {
                             libc::SIGKILL,
                             Duration::from_secs(service.stop_wait),
                         ) {
-                            logger::error!(self.logger, "Error: Kill job: {err}");
+                            logger::error!(self.logger, "Kill job: {err}");
                         };
-                        JobStatus::Stopping
+                        (JobStatus::Stopping, false)
                     }
-                    _ => JobStatus::TimedOut,
+                    _ => (JobStatus::TimedOut, false),
                 }
             }
         };
@@ -148,5 +133,13 @@ impl Orchestrator {
         };
 
         job.status = new_status;
+
+        // If job needs to be restarted, do it
+        if restart {
+            // If restart is true, the job is in finish, so  this will work
+            if let Err(error) = self.start_request(&event.alias) {
+                logger::error!(self.logger, "Restarting job: {error}");
+            }
+        }
     }
 }
