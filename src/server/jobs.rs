@@ -217,6 +217,16 @@ impl Orchestrator {
 
         response
     }
+
+    pub fn job_status(&self, alias: &str) -> Result<String, OrchestratorError> {
+        // Get the job
+        let job = self.jobs.get(alias).ok_or(OrchestratorError::JobNotFound)?;
+
+        Ok(format!(
+            "status: {:?}\nretries: {}",
+            job.status, job.retries
+        ))
+    }
 }
 
 // #################### UTILS ####################

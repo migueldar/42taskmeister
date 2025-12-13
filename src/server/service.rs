@@ -14,7 +14,9 @@ pub enum ServiceAction {
     Start(String),
     Restart(String),
     Stop(String),
+    Status(String),
     Reload,
+    Help,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]

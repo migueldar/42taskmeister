@@ -1,3 +1,11 @@
+use crate::{
+    CLI_HELP,
+    events::JobEvent,
+    jobs::{Job, JobFlags, JobStatus},
+    service::{Service, ServiceAction, Services},
+    watcher::{self, Watched},
+};
+use logger::{LogLevel, Logger};
 use std::{
     collections::HashMap,
     fmt, io,
@@ -7,15 +15,6 @@ use std::{
     },
     thread,
     time::Duration,
-};
-
-use logger::{LogLevel, Logger};
-
-use crate::{
-    events::JobEvent,
-    jobs::{Job, JobFlags, JobStatus},
-    service::{Service, ServiceAction, Services},
-    watcher::{self, Watched},
 };
 
 #[derive(Debug)]
@@ -33,8 +32,8 @@ impl fmt::Display for OrchestratorError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             OrchestratorError::ServiceNotFound => write!(f, "Service not found"),
-            OrchestratorError::ServiceUpdate => write!(f, "Error while updating services"),
-            OrchestratorError::ServiceStopped => write!(f, "Error stopping service"),
+            OrchestratorError::ServiceUpdate => write!(f, "While updating services"),
+            OrchestratorError::ServiceStopped => write!(f, "Stopping service"),
             OrchestratorError::ServiceAlreadyStarted => write!(f, "Service already started"),
             OrchestratorError::ServiceAlreadyStopping => write!(f, "Service already stopped"),
             OrchestratorError::JobNotFound => write!(f, "Job not found"),
@@ -46,7 +45,7 @@ impl fmt::Display for OrchestratorError {
 #[derive(Debug)]
 pub struct OrchestratorRequest {
     pub action: ServiceAction,
-    pub response_channel: Sender<Result<(), OrchestratorError>>,
+    pub response_channel: Sender<Result<String, OrchestratorError>>,
 }
 
 pub enum OrchestratorMsg {
@@ -163,9 +162,15 @@ impl Orchestrator {
             match message {
                 OrchestratorMsg::Request(request) => {
                     let result = match request.action {
-                        ServiceAction::Start(alias) => self.start_request(&alias),
-                        ServiceAction::Restart(alias) => self.stop_request(&alias, false, true),
-                        ServiceAction::Stop(alias) => self.stop_request(&alias, false, false),
+                        ServiceAction::Start(alias) => {
+                            self.start_request(&alias).map(|_| "OK".to_string())
+                        }
+                        ServiceAction::Restart(alias) => self
+                            .stop_request(&alias, false, true)
+                            .map(|_| "OK".to_string()),
+                        ServiceAction::Stop(alias) => self
+                            .stop_request(&alias, false, false)
+                            .map(|_| "OK".to_string()),
                         ServiceAction::Reload => match self.services.update() {
                             Ok(up_services) => {
                                 let mut res = Ok(());
@@ -191,7 +196,10 @@ impl Orchestrator {
                                 logger::error!(self.logger, "Updating services: {err}");
                                 Err(OrchestratorError::ServiceUpdate)
                             }
-                        },
+                        }
+                        .map(|_| "OK".to_string()),
+                        ServiceAction::Status(alias) => self.job_status(&alias),
+                        ServiceAction::Help => Ok(CLI_HELP.to_string()),
                     };
 
                     request

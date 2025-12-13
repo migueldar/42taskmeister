@@ -19,6 +19,15 @@ use std::{
 };
 use taskmeister::{Request, Response, ResponsePart, dir_utils};
 
+pub const CLI_HELP: &str = r#"Commands:
+	start [st]	Start a service
+	stop [sp]	Stop a job
+	restart [rs]	Restart a job
+	status [stat]	Show the current status of a job
+	reload [rl]	Reload the configuration for the services
+	help [?]	Show this help
+"#;
+
 fn command_to_action(req: &Request) -> Option<ServiceAction> {
     let alias = req.args.first().cloned().unwrap_or_default();
 
@@ -26,7 +35,9 @@ fn command_to_action(req: &Request) -> Option<ServiceAction> {
         "start" | "st" => Some(ServiceAction::Start(alias)),
         "stop" | "sp" => Some(ServiceAction::Stop(alias)),
         "restart" | "rs" => Some(ServiceAction::Restart(alias)),
+        "status" | "stat" => Some(ServiceAction::Status(alias)),
         "reload" | "rl" => Some(ServiceAction::Reload),
+        "help" | "?" => Some(ServiceAction::Help),
         _ => None,
     }
 }
@@ -56,7 +67,7 @@ fn process_request(
     let mut response = vec![];
     for resp in rx {
         response.push(match resp {
-            Ok(_) => ResponsePart::Info("OK".to_string()),
+            Ok(resp_msg) => ResponsePart::Info(resp_msg),
             Err(err) => ResponsePart::Error(err.to_string()),
         })
     }
