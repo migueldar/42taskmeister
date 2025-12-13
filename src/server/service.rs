@@ -82,7 +82,8 @@ impl Services {
             };
         }
 
-        // Remaining in self are the services to stop
+        // Remaining in self are the services to stop. This means this service
+        // has disapeared, so also means to remove the service
         up.extend(
             self.services
                 .iter()

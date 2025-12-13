@@ -13,7 +13,7 @@ use logger::{LogLevel, Logger};
 
 use crate::{
     events::JobEvent,
-    jobs::{Job, JobStatus},
+    jobs::{Job, JobFlags, JobStatus},
     service::{Service, ServiceAction, Services},
     watcher::{self, Watched},
 };
@@ -85,10 +85,12 @@ impl Orchestrator {
         self.jobs.get(alias).map(|job| job.status.clone())
     }
 
-    pub fn get_remove_service(&self, alias: &str) -> bool {
-        self.jobs
-            .get(alias)
-            .is_some_and(|job| job.remove_service == true)
+    pub fn consume_job_flags(&mut self, alias: &str) -> JobFlags {
+        let Some(job) = self.jobs.get_mut(alias) else {
+            return JobFlags::default();
+        };
+
+        job.flags.consume()
     }
 
     pub fn inc_job_retries(&mut self, alias: &str) -> Option<u8> {
@@ -136,84 +138,6 @@ impl Orchestrator {
         }
     }
 
-    // #################### REQUESTS ####################
-    fn start_request(&mut self, alias: &str) -> Result<(), OrchestratorError> {
-        // Get or create a new job
-        let job = self.create_job(alias)?;
-
-        // Only finished, created and Free are considered valid states to start a job
-        let mut response = match job.status {
-            JobStatus::Starting
-            | JobStatus::Running(_)
-            | JobStatus::Stopping
-            | JobStatus::TimedOut => Err(OrchestratorError::ServiceAlreadyStarted),
-            JobStatus::Finished(exit_status) => {
-                // At this point event loop will have moved the job
-                // out from the watcher
-                job.last_exit_code = exit_status;
-                Ok(())
-            }
-            JobStatus::Created => Ok(()),
-        };
-
-        // If response is positive, start the job
-        if let Ok(_) = response {
-            // Update job
-            job.status = JobStatus::Starting;
-
-            response = match self.start_job(alias) {
-                Ok(res) => {
-                    if let Some(old_watched_jobs) = res {
-                        // TODO: Do something with old jobs in this case?
-                        logger::warn!(
-                            self.logger,
-                            "Started new jobs but old where not cleaned up from the watcher: {old_watched_jobs:?}"
-                        );
-                    }
-
-                    Ok(())
-                }
-                Err(err) => Err(err),
-            };
-        };
-
-        response
-    }
-
-    fn stop_request(&mut self, alias: &str, remove_service: bool) -> Result<(), OrchestratorError> {
-        // Get the job
-        let job = self
-            .jobs
-            .get_mut(alias)
-            .ok_or(OrchestratorError::JobNotFound)?;
-
-        // Only starting and Running are considered valid states to stop a job
-        let mut response = match job.status {
-            JobStatus::Starting | JobStatus::Running(_) => Ok(()),
-            JobStatus::Stopping | JobStatus::TimedOut => {
-                Err(OrchestratorError::ServiceAlreadyStopping)
-            }
-            JobStatus::Finished(exit_status) => {
-                // At this point event loop will have moved the job
-                // out from the watcher
-                job.last_exit_code = exit_status;
-                Err(OrchestratorError::ServiceStopped)
-            }
-            JobStatus::Created => Err(OrchestratorError::ServiceStopped),
-        };
-
-        // If response is positive, stop the job
-        if let Ok(_) = response {
-            // Update job
-            job.status = JobStatus::Stopping;
-            job.remove_service = remove_service;
-
-            response = self.stop_job(&alias);
-        };
-
-        response
-    }
-
     pub fn orchestrate(mut self) {
         let watched_jobs_thread = Arc::clone(&self.watched);
         let tx_events = self.messages_tx.clone();
@@ -240,17 +164,19 @@ impl Orchestrator {
                 OrchestratorMsg::Request(request) => {
                     let result = match request.action {
                         ServiceAction::Start(alias) => self.start_request(&alias),
-                        ServiceAction::Restart(_) => todo!(),
-                        ServiceAction::Stop(alias) => self.stop_request(&alias, false),
+                        ServiceAction::Restart(alias) => self.stop_request(&alias, false, true),
+                        ServiceAction::Stop(alias) => self.stop_request(&alias, false, false),
                         ServiceAction::Reload => match self.services.update() {
                             Ok(up_services) => {
                                 let mut res = Ok(());
                                 for service in up_services {
                                     res = match service {
                                         ServiceAction::Start(alias) => self.start_request(&alias),
-                                        ServiceAction::Restart(_) => todo!(),
+                                        ServiceAction::Restart(alias) => {
+                                            self.stop_request(&alias, true, true)
+                                        }
                                         ServiceAction::Stop(alias) => {
-                                            self.stop_request(&alias, true)
+                                            self.stop_request(&alias, true, false)
                                         }
                                         _ => Ok(()),
                                     };
