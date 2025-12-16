@@ -129,7 +129,7 @@ impl Drop for Logger {
 
 // Calc timestamp using Howard Hinnant algorithm:
 // https://howardhinnant.github.io/date_algorithms.html
-fn timestamp() -> String {
+pub fn timestamp() -> String {
     let Ok(now) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) else {
         return "[Wrong System Time]".to_string();
     };

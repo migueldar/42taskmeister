@@ -3,7 +3,7 @@
 // orchestrator depeendencies.
 
 use libc;
-use logger::LogLevel;
+use logger::{self, LogLevel};
 use std::{io, time::Duration};
 
 use crate::{
@@ -35,6 +35,7 @@ impl JobFlags {
 
 pub struct Job {
     pub status: JobStatus,
+    pub started: Option<String>,
     pub retries: u8,
     pub last_exit_code: i32, // TODO: Check the need of this
     pub flags: JobFlags,
@@ -60,6 +61,7 @@ impl Orchestrator {
             retries: 0,
             last_exit_code: 0,
             flags: JobFlags::default(),
+            started: None,
         }))
     }
 
@@ -156,6 +158,7 @@ impl Orchestrator {
         if let Ok(_) = response {
             // Update job
             job.status = JobStatus::Starting;
+            job.started = Some(logger::timestamp());
 
             response = match self.start_job(alias) {
                 Ok(res) => {
@@ -221,10 +224,25 @@ impl Orchestrator {
     pub fn job_status(&self, alias: &str) -> Result<String, OrchestratorError> {
         // Get the job
         let job = self.jobs.get(alias).ok_or(OrchestratorError::JobNotFound)?;
+        let service = self
+            .get_services()
+            .get(alias)
+            .cloned()
+            .ok_or(OrchestratorError::ServiceNotFound)?;
 
         Ok(format!(
-            "status: {:?}\nretries: {}",
-            job.status, job.retries
+            r#"status: {:?} Since {}
+PIDs: {}
+Configuration: {}"#,
+            job.status,
+            job.started.as_ref().map_or("[]", |s| s),
+            self.get_pid(alias)
+                .unwrap_or(Vec::new())
+                .iter()
+                .map(|pid| pid.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            service.file.display()
         ))
     }
 }

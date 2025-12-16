@@ -30,6 +30,8 @@ pub enum RestartOptions {
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 pub struct Service {
+    #[serde(skip)]
+    pub file: PathBuf,
     alias: String,
     cmd: String,
     clone: u16,
@@ -114,7 +116,7 @@ fn load_services(paths: &Vec<PathBuf>) -> Result<HashMap<String, Service>, io::E
     for p in paths {
         let p = dir_utils::expand_home_dir(p);
         dir_utils::walk_dir(p, &mut |closure_p| {
-            let Ok(s) = toml::from_str::<Service>(&fs::read_to_string(&closure_p)?) else {
+            let Ok(mut s) = toml::from_str::<Service>(&fs::read_to_string(&closure_p)?) else {
                 return Err(io::Error::other(format!(
                     "Couldn't deserialize: {}",
                     closure_p.display()
@@ -130,6 +132,7 @@ fn load_services(paths: &Vec<PathBuf>) -> Result<HashMap<String, Service>, io::E
                     )));
                 }
                 Entry::Vacant(v) => {
+                    s.file = closure_p;
                     v.insert(s);
                     Ok(())
                 }

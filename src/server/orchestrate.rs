@@ -123,6 +123,18 @@ impl Orchestrator {
         Ok(())
     }
 
+    pub fn get_pid(&self, alias: &str) -> Result<Vec<u32>, OrchestratorError> {
+        Ok(self
+            .watched
+            .lock()
+            .unwrap()
+            .get(alias)
+            .ok_or(OrchestratorError::JobNotFound)?
+            .iter()
+            .map(|watched_job| watched_job.process.id())
+            .collect())
+    }
+
     // #################### UTILS ####################
 
     pub fn remove_watched(&self, alias: &str) -> Option<Vec<Watched>> {
