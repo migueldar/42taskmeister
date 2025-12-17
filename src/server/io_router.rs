@@ -58,6 +58,7 @@ struct IoRouter {
     period: Duration,
 }
 
+// Io Router will loop infinitelly, in each iteration will write to the standard i/o present in Tee, then will write to each mpsc channel also given in each tee upon creation. Implement ring buffer and read prediocally to it. Then client will send trough the channel another channel to consume this buffer when needed.
 impl IoRouter {
     pub fn route(&self) {
         loop {
