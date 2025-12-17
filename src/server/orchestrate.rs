@@ -25,6 +25,7 @@ pub enum OrchestratorError {
     ServiceAlreadyStarted,
     ServiceAlreadyStopping,
     JobNotFound,
+    JobHasNoIoHandle,
     JobIoError(io::Error),
 }
 
@@ -38,6 +39,9 @@ impl fmt::Display for OrchestratorError {
             OrchestratorError::ServiceAlreadyStopping => write!(f, "Service already stopped"),
             OrchestratorError::JobNotFound => write!(f, "Job not found"),
             OrchestratorError::JobIoError(error) => write!(f, "Job I/O error: {}", error),
+            OrchestratorError::JobHasNoIoHandle => {
+                write!(f, "Job has no handle for either stdin/stdout/stderr")
+            }
         }
     }
 }

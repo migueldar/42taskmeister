@@ -7,6 +7,7 @@ use logger::{self, LogLevel};
 use std::{io, time::Duration};
 
 use crate::{
+    io_router::Tee,
     orchestrate::{Orchestrator, OrchestratorError},
     watcher::{Watched, WatchedTimeout},
 };
@@ -36,6 +37,7 @@ impl JobFlags {
 pub struct Job {
     pub status: JobStatus,
     pub started: Option<String>,
+    pub io: Option<Tee>,
     pub retries: u8,
     pub last_exit_code: i32, // TODO: Check the need of this
     pub flags: JobFlags,
@@ -62,25 +64,57 @@ impl Orchestrator {
             last_exit_code: 0,
             flags: JobFlags::default(),
             started: None,
+            io: None,
         }))
     }
 
-    fn start_job(&self, alias: &str) -> Result<Option<Vec<Watched>>, OrchestratorError> {
+    fn start_job(&mut self, alias: &str) -> Result<Option<Vec<Watched>>, OrchestratorError> {
         let service = self
             .get_services()
             .get(&alias)
             .cloned()
             .ok_or(OrchestratorError::ServiceNotFound)?;
 
+        let job = self
+            .jobs
+            .get_mut(alias)
+            .ok_or(OrchestratorError::JobNotFound)?;
+
         logger::info!(self.logger, "[{}] Starting", alias);
+
+        // Start the child process
+        let mut child = service
+            .start()
+            .map_err(|e| OrchestratorError::JobIoError(e))?;
+
+        // Take the I/O handlers out from child
+        job.io = Some(
+            Tee::new(
+                child
+                    .stdout
+                    .take()
+                    .ok_or(OrchestratorError::JobHasNoIoHandle)?,
+                child
+                    .stdin
+                    .take()
+                    .ok_or(OrchestratorError::JobHasNoIoHandle)?,
+                child
+                    .stderr
+                    .take()
+                    .ok_or(OrchestratorError::JobHasNoIoHandle)?,
+                &service.stdout,
+                &service.stdin,
+                &service.stderr,
+            )
+            .map_err(|e| OrchestratorError::JobIoError(e))?,
+        );
+
         // Add handler to the watched jobs
         let mut watched = self.watched.lock().unwrap();
         Ok(watched.insert(
             alias.to_string(),
             vec![Watched {
-                process: service
-                    .start()
-                    .map_err(|e| OrchestratorError::JobIoError(e))?,
+                process: child,
                 previous_status: JobStatus::Starting,
                 timeout: WatchedTimeout::new(Some(Duration::from_secs(service.start_time))),
             }],
@@ -111,7 +145,7 @@ impl Orchestrator {
     ) -> Result<(), OrchestratorError> {
         logger::info!(self.logger, "[{}] Killing({})", alias, signal);
 
-        // Get all the jobs id
+        // Get all the jobs id and restart timeout
         let job_pids: Vec<u32> = self
             .watched
             .lock()

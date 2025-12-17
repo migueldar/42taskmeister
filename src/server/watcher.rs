@@ -52,6 +52,7 @@ pub fn watch(
     period: Duration,
     logger: Logger,
 ) {
+    // TODO: Handle clean exit from this inifite loop
     loop {
         for (alias, jobs) in watched_jobs.lock().unwrap().iter_mut() {
             let event_sender = |event| {
