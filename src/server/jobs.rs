@@ -7,7 +7,7 @@ use logger::{self, LogLevel};
 use std::{io, time::Duration};
 
 use crate::{
-    io_router::Tee,
+    io_router::{IoRouterRequest, Tee},
     orchestrate::{Orchestrator, OrchestratorError},
     watcher::{Watched, WatchedTimeout},
 };
@@ -37,7 +37,6 @@ impl JobFlags {
 pub struct Job {
     pub status: JobStatus,
     pub started: Option<String>,
-    pub io: Option<Tee>,
     pub retries: u8,
     pub last_exit_code: i32, // TODO: Check the need of this
     pub flags: JobFlags,
@@ -64,7 +63,6 @@ impl Orchestrator {
             last_exit_code: 0,
             flags: JobFlags::default(),
             started: None,
-            io: None,
         }))
     }
 
@@ -75,11 +73,6 @@ impl Orchestrator {
             .cloned()
             .ok_or(OrchestratorError::ServiceNotFound)?;
 
-        let job = self
-            .jobs
-            .get_mut(alias)
-            .ok_or(OrchestratorError::JobNotFound)?;
-
         logger::info!(self.logger, "[{}] Starting", alias);
 
         // Start the child process
@@ -87,27 +80,15 @@ impl Orchestrator {
             .start()
             .map_err(|e| OrchestratorError::JobIoError(e))?;
 
-        // Take the I/O handlers out from child
-        job.io = Some(
-            Tee::new(
-                child
-                    .stdout
-                    .take()
-                    .ok_or(OrchestratorError::JobHasNoIoHandle)?,
-                child
-                    .stdin
-                    .take()
-                    .ok_or(OrchestratorError::JobHasNoIoHandle)?,
-                child
-                    .stderr
-                    .take()
-                    .ok_or(OrchestratorError::JobHasNoIoHandle)?,
-                &service.stdout,
-                &service.stdin,
-                &service.stderr,
-            )
-            .map_err(|e| OrchestratorError::JobIoError(e))?,
-        );
+        // Create an I/O handler
+        self.io_router_requests.send(IoRouterRequest::Create(
+            alias.to_string(),
+            child
+                .stdout
+                .take()
+                .ok_or(OrchestratorError::JobHasNoIoHandle)?,
+            service.stdout,
+        ));
 
         // Add handler to the watched jobs
         let mut watched = self.watched.lock().unwrap();

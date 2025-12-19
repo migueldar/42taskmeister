@@ -2,7 +2,9 @@
 // module, but it is indeed the orchestrator and can not be splitted without having
 // orchestrator depeendencies.use std::time::Duration;
 
-use crate::{jobs::JobStatus, orchestrate::Orchestrator, service::RestartOptions};
+use crate::{
+    io_router::IoRouterRequest, jobs::JobStatus, orchestrate::Orchestrator, service::RestartOptions,
+};
 use logger::LogLevel;
 use std::time::Duration;
 
@@ -54,6 +56,10 @@ impl Orchestrator {
             }
 
             JobStatus::Finished(exit_code) => 'finished: {
+                // Remove the I/O handler
+                self.io_router_requests
+                    .send(IoRouterRequest::Remove(event.alias.clone()));
+
                 // First remove the watched job
                 self.remove_watched(&event.alias);
 

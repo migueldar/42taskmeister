@@ -1,6 +1,7 @@
 use crate::{
     CLI_HELP,
     events::JobEvent,
+    io_router::{self, IoRouter, IoRouterRequest},
     jobs::{Job, JobFlags, JobStatus},
     service::{Service, ServiceAction, Services},
     watcher::{self, Watched},
@@ -64,11 +65,18 @@ pub struct Orchestrator {
     pub watched: Arc<Mutex<HashMap<String, Vec<Watched>>>>,
     messages_tx: Sender<OrchestratorMsg>,
     messages_rx: Receiver<OrchestratorMsg>,
+    pub io_router_requests: Sender<IoRouterRequest>,
 }
 
 impl Orchestrator {
     pub fn new(services: Services, logger: Logger) -> (Orchestrator, Sender<OrchestratorMsg>) {
         let (tx, rx) = mpsc::channel();
+        let (io_tx, io_rx) = mpsc::channel();
+        let io_logger = logger.clone();
+
+        thread::spawn(move || {
+            io_router::route(io_rx, io_logger);
+        });
 
         (
             Orchestrator {
@@ -78,6 +86,7 @@ impl Orchestrator {
                 watched: Arc::new(Mutex::new(HashMap::new())),
                 messages_tx: tx.clone(),
                 messages_rx: rx,
+                io_router_requests: io_tx,
             },
             tx,
         )
