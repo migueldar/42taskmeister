@@ -7,7 +7,7 @@ use logger::{self, LogLevel};
 use std::{io, time::Duration};
 
 use crate::{
-    io_router::{IoRouterRequest, RouterRequest, Tee},
+    io_router::RouterRequest,
     orchestrate::{Orchestrator, OrchestratorError},
     watcher::{Watched, WatchedTimeout},
 };
@@ -81,14 +81,19 @@ impl Orchestrator {
             .map_err(|e| OrchestratorError::JobIoError(e))?;
 
         // Create an I/O handler
-        self.io_router_requests.send(IoRouterRequest::Create(
-            alias.to_string(),
+        self.io_router_requests.create(
+            alias,
             child
                 .stdout
                 .take()
                 .ok_or(OrchestratorError::JobHasNoIoHandle)?,
-            service.stdout,
-        ));
+            child
+                .stderr
+                .take()
+                .ok_or(OrchestratorError::JobHasNoIoHandle)?,
+            &service.stdout,
+            &service.stderr,
+        );
 
         // Add handler to the watched jobs
         let mut watched = self.watched.lock().unwrap();
@@ -245,10 +250,15 @@ impl Orchestrator {
             .cloned()
             .ok_or(OrchestratorError::ServiceNotFound)?;
 
+        let (stdout, stderr) = self.io_router_requests.read_buff(alias);
+
         Ok(format!(
             r#"status: {:?} Since {}
 PIDs: {}
 Configuration: {}
+Stdout:
+{}
+Stderr:
 {}"#,
             job.status,
             job.started.as_ref().map_or("[]", |s| s),
@@ -259,7 +269,8 @@ Configuration: {}
                 .collect::<Vec<_>>()
                 .join(", "),
             service.file.display(),
-            self.io_router_requests.read_buff(alias),
+            stdout,
+            stderr,
         ))
     }
 }

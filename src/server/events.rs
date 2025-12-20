@@ -3,7 +3,7 @@
 // orchestrator depeendencies.use std::time::Duration;
 
 use crate::{
-    io_router::IoRouterRequest, jobs::JobStatus, orchestrate::Orchestrator, service::RestartOptions,
+    io_router::RouterRequest, jobs::JobStatus, orchestrate::Orchestrator, service::RestartOptions,
 };
 use logger::LogLevel;
 use std::time::Duration;
@@ -57,8 +57,7 @@ impl Orchestrator {
 
             JobStatus::Finished(exit_code) => 'finished: {
                 // Remove the I/O handler
-                self.io_router_requests
-                    .send(IoRouterRequest::Remove(event.alias.clone()));
+                self.io_router_requests.remove(&event.alias);
 
                 // First remove the watched job
                 self.remove_watched(&event.alias);
