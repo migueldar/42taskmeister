@@ -4,7 +4,7 @@
 
 use libc;
 use logger::{self, LogLevel};
-use std::{io, time::Duration};
+use std::{io, os::fd::AsRawFd, time::Duration};
 
 use crate::{
     io_router::RouterRequest,
@@ -80,20 +80,21 @@ impl Orchestrator {
             .start()
             .map_err(|e| OrchestratorError::JobIoError(e))?;
 
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or(OrchestratorError::JobHasNoIoHandle)?;
+        set_fd_non_blocking(&stdout);
+
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or(OrchestratorError::JobHasNoIoHandle)?;
+        set_fd_non_blocking(&stderr);
+
         // Create an I/O handler
-        self.io_router_requests.create(
-            alias,
-            child
-                .stdout
-                .take()
-                .ok_or(OrchestratorError::JobHasNoIoHandle)?,
-            child
-                .stderr
-                .take()
-                .ok_or(OrchestratorError::JobHasNoIoHandle)?,
-            &service.stdout,
-            &service.stderr,
-        );
+        self.io_router_requests
+            .create(alias, stdout, stderr, &service.stdout, &service.stderr);
 
         // Add handler to the watched jobs
         let mut watched = self.watched.lock().unwrap();
@@ -282,5 +283,16 @@ fn kill(pid: u32, signal: i32) -> io::Result<()> {
         Err(io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+fn set_fd_non_blocking<T>(fd: &T)
+where
+    T: AsRawFd,
+{
+    unsafe {
+        let fd = fd.as_raw_fd();
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
     }
 }

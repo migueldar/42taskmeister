@@ -38,6 +38,7 @@ impl Stdout {
 
                 Ok(())
             }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(()),
             Err(err) => Err(err),
         }
     }
@@ -68,6 +69,7 @@ impl Stderr {
 
                 Ok(())
             }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(()),
             Err(err) => Err(err),
         }
     }
