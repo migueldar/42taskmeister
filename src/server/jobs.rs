@@ -7,7 +7,7 @@ use logger::{self, LogLevel};
 use std::{io, time::Duration};
 
 use crate::{
-    io_router::{IoRouterRequest, Tee},
+    io_router::{IoRouterRequest, RouterRequest, Tee},
     orchestrate::{Orchestrator, OrchestratorError},
     watcher::{Watched, WatchedTimeout},
 };
@@ -248,7 +248,8 @@ impl Orchestrator {
         Ok(format!(
             r#"status: {:?} Since {}
 PIDs: {}
-Configuration: {}"#,
+Configuration: {}
+{}"#,
             job.status,
             job.started.as_ref().map_or("[]", |s| s),
             self.get_pid(alias)
@@ -257,7 +258,8 @@ Configuration: {}"#,
                 .map(|pid| pid.to_string())
                 .collect::<Vec<_>>()
                 .join(", "),
-            service.file.display()
+            service.file.display(),
+            self.io_router_requests.read_buff(alias),
         ))
     }
 }

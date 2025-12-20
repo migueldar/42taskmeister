@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs::{File, OpenOptions},
     io::{self, Read, Write},
     process::{ChildStderr, ChildStdin, ChildStdout},
@@ -11,6 +11,7 @@ use std::{
 use logger::{LogLevel, Logger};
 
 const READ_BUF_LEN: usize = 1024;
+const DEQUE_BUF_LEN: usize = 10;
 
 pub struct Tee {
     stdout: ChildStdout,
@@ -20,6 +21,7 @@ pub struct Tee {
     // def_stdin: Stdio,
     // def_stderr: Stdio,
     tx: Option<SyncSender<Vec<u8>>>,
+    buff: VecDeque<Vec<u8>>,
 }
 
 impl Tee {
@@ -53,6 +55,7 @@ impl Tee {
             //     o => Stdio::from(OpenOptions::new().create(true).write(true).open(o)?),
             // },
             tx: None,
+            buff: VecDeque::with_capacity(READ_BUF_LEN * DEQUE_BUF_LEN),
         })
     }
 }
@@ -60,7 +63,8 @@ impl Tee {
 pub enum IoRouterRequest {
     Create(String, ChildStdout, String), // Alias, Pipe, Default File
     Remove(String),                      // Alias
-    StartForwarding((String, SyncSender<Vec<u8>>)), // Alias, Channel
+    ReadBuff(String, Sender<Vec<u8>>),   // Alias, Channel
+    StartForwardingStream(String, SyncSender<Vec<u8>>), // Alias, Channel
     StopForwarding(String),              // Alias
 }
 
@@ -71,10 +75,21 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
     loop {
         while let Ok(req) = requests.try_recv() {
             match req {
-                IoRouterRequest::StartForwarding((alias, resp_tx)) => {
+                IoRouterRequest::StartForwardingStream(alias, resp_tx) => {
                     if let Some(tee) = ios.get_mut(&alias) {
                         tee.tx = Some(resp_tx);
                     }
+                }
+                IoRouterRequest::ReadBuff(alias, resp_tx) => {
+                    // Send one time a vector with the whole contents of the current buffer
+                    resp_tx.send(match ios.get(&alias) {
+                        Some(tee) => tee
+                            .buff
+                            .iter()
+                            .flat_map(|elem| elem.iter().cloned())
+                            .collect(),
+                        None => Vec::new(),
+                    });
                 }
                 IoRouterRequest::StopForwarding(alias) => {
                     if let Some(tee) = ios.get_mut(&alias) {
@@ -89,7 +104,6 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
                         Err(err) => logger::warn!(logger, "Creating new Tee: {}", err),
                     }
                 }
-
                 IoRouterRequest::Remove(alias) => {
                     ios.remove(&alias);
                 }
@@ -102,6 +116,9 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
             match tee.stdout.read(&mut buf) {
                 Ok(0) => break,
                 Ok(bytes) => {
+                    // Always push into the ring buffer
+                    ring_buf_push(&mut tee.buff, buf[..bytes].to_vec());
+
                     if let Some(tx) = &tee.tx {
                         tx.send(buf[..bytes].to_vec());
                     }
@@ -117,5 +134,32 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
             }
         }
         thread::sleep(period);
+    }
+}
+
+fn ring_buf_push(buff: &mut VecDeque<Vec<u8>>, element: Vec<u8>) {
+    if buff.len() == buff.capacity() {
+        buff.pop_front();
+    }
+
+    buff.push_back(element);
+}
+
+pub trait RouterRequest {
+    fn read_buff(&self, alias: &str) -> String;
+}
+
+impl RouterRequest for Sender<IoRouterRequest> {
+    fn read_buff(&self, alias: &str) -> String {
+        let (tx, rx) = mpsc::channel();
+
+        if let Err(_) = self.send(IoRouterRequest::ReadBuff(alias.to_string(), tx)) {
+            return String::new();
+        }
+
+        match rx.recv() {
+            Ok(buf) => String::from_utf8_lossy(&buf[buf.len().saturating_sub(512)..]).to_string(),
+            Err(_) => String::new(),
+        }
     }
 }

@@ -1,7 +1,7 @@
 use crate::{
     CLI_HELP,
     events::JobEvent,
-    io_router::{self, IoRouter, IoRouterRequest},
+    io_router::{self, IoRouterRequest},
     jobs::{Job, JobFlags, JobStatus},
     service::{Service, ServiceAction, Services},
     watcher::{self, Watched},
@@ -203,7 +203,13 @@ impl Orchestrator {
                                     res = match service {
                                         ServiceAction::Start(alias) => self.start_request(&alias),
                                         ServiceAction::Restart(alias) => {
-                                            self.stop_request(&alias, true, true)
+                                            match self.stop_request(&alias, true, true) {
+                                                // Service stopped error on restart is ok satus
+                                                Err(OrchestratorError::ServiceStopped) | Ok(_) => {
+                                                    Ok(())
+                                                }
+                                                err => err,
+                                            }
                                         }
                                         ServiceAction::Stop(alias) => {
                                             self.stop_request(&alias, true, false)
