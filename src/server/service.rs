@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, hash_map::Entry},
-    fs::{self, OpenOptions},
+    fs::{self},
     io,
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -40,9 +40,9 @@ pub struct Service {
     pub stop_signal: i32,
     pub stop_wait: u64,
     exit_codes: Vec<i32>,
-    stdout: String,
-    stdin: String,
-    stderr: String,
+    pub stdout: String,
+    pub stdin: String,
+    pub stderr: String,
     variables: Vec<(String, String)>,
     working_dir: PathBuf,
     umask: u16,
@@ -145,24 +145,6 @@ fn load_services(paths: &Vec<PathBuf>) -> Result<HashMap<String, Service>, io::E
 
 impl Service {
     pub fn start(&self) -> Result<Child, io::Error> {
-        let stdout = match self.stdout.as_str() {
-            "stdout" => Stdio::inherit(),
-            "null" => Stdio::null(),
-            o => Stdio::from(OpenOptions::new().create(true).write(true).open(o)?),
-        };
-
-        let stdin = match self.stdin.as_str() {
-            "stdin" => Stdio::inherit(),
-            "null" => Stdio::null(),
-            i => Stdio::from(OpenOptions::new().create(true).read(true).open(i)?),
-        };
-
-        let stderr = match self.stderr.as_str() {
-            "stderr" => Stdio::inherit(),
-            "null" => Stdio::null(),
-            o => Stdio::from(OpenOptions::new().create(true).write(true).open(o)?),
-        };
-
         let mut args = self.cmd.split_ascii_whitespace();
 
         Command::new(
@@ -170,9 +152,9 @@ impl Service {
                 .ok_or(io::Error::other("No command provided!"))?,
         )
         .args(args)
-        .stdout(stdout)
-        .stdin(stdin)
-        .stderr(stderr)
+        .stdout(Stdio::piped())
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
         .current_dir(&self.working_dir)
         .spawn()
     }

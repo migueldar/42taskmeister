@@ -4,9 +4,10 @@
 
 use libc;
 use logger::{self, LogLevel};
-use std::{io, time::Duration};
+use std::{io, os::fd::AsRawFd, time::Duration};
 
 use crate::{
+    io_router::RouterRequest,
     orchestrate::{Orchestrator, OrchestratorError},
     watcher::{Watched, WatchedTimeout},
 };
@@ -65,7 +66,7 @@ impl Orchestrator {
         }))
     }
 
-    fn start_job(&self, alias: &str) -> Result<Option<Vec<Watched>>, OrchestratorError> {
+    fn start_job(&mut self, alias: &str) -> Result<Option<Vec<Watched>>, OrchestratorError> {
         let service = self
             .get_services()
             .get(&alias)
@@ -73,14 +74,45 @@ impl Orchestrator {
             .ok_or(OrchestratorError::ServiceNotFound)?;
 
         logger::info!(self.logger, "[{}] Starting", alias);
+
+        // Start the child process
+        let mut child = service
+            .start()
+            .map_err(|e| OrchestratorError::JobIoError(e))?;
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or(OrchestratorError::JobHasNoIoHandle)?;
+        set_fd_non_blocking(&stdout);
+
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or(OrchestratorError::JobHasNoIoHandle)?;
+        set_fd_non_blocking(&stderr);
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or(OrchestratorError::JobHasNoIoHandle)?;
+
+        // Create an I/O handler
+        self.io_router_requests.create(
+            alias,
+            stdout,
+            stderr,
+            stdin,
+            &service.stdout,
+            &service.stderr,
+        );
+
         // Add handler to the watched jobs
         let mut watched = self.watched.lock().unwrap();
         Ok(watched.insert(
             alias.to_string(),
             vec![Watched {
-                process: service
-                    .start()
-                    .map_err(|e| OrchestratorError::JobIoError(e))?,
+                process: child,
                 previous_status: JobStatus::Starting,
                 timeout: WatchedTimeout::new(Some(Duration::from_secs(service.start_time))),
             }],
@@ -111,7 +143,7 @@ impl Orchestrator {
     ) -> Result<(), OrchestratorError> {
         logger::info!(self.logger, "[{}] Killing({})", alias, signal);
 
-        // Get all the jobs id
+        // Get all the jobs id and restart timeout
         let job_pids: Vec<u32> = self
             .watched
             .lock()
@@ -230,10 +262,19 @@ impl Orchestrator {
             .cloned()
             .ok_or(OrchestratorError::ServiceNotFound)?;
 
+        let (stdout, stderr) = self.io_router_requests.read_buff(alias);
+
         Ok(format!(
             r#"status: {:?} Since {}
 PIDs: {}
-Configuration: {}"#,
+Configuration: {}
+Stdout:
+
+{}
+
+Stderr:
+
+{}"#,
             job.status,
             job.started.as_ref().map_or("[]", |s| s),
             self.get_pid(alias)
@@ -242,7 +283,9 @@ Configuration: {}"#,
                 .map(|pid| pid.to_string())
                 .collect::<Vec<_>>()
                 .join(", "),
-            service.file.display()
+            service.file.display(),
+            stdout,
+            stderr,
         ))
     }
 }
@@ -254,5 +297,16 @@ fn kill(pid: u32, signal: i32) -> io::Result<()> {
         Err(io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+fn set_fd_non_blocking<T>(fd: &T)
+where
+    T: AsRawFd,
+{
+    unsafe {
+        let fd = fd.as_raw_fd();
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
     }
 }

@@ -1,6 +1,7 @@
 use crate::{
     CLI_HELP,
     events::JobEvent,
+    io_router::{self, IoRouterRequest},
     jobs::{Job, JobFlags, JobStatus},
     service::{Service, ServiceAction, Services},
     watcher::{self, Watched},
@@ -25,6 +26,7 @@ pub enum OrchestratorError {
     ServiceAlreadyStarted,
     ServiceAlreadyStopping,
     JobNotFound,
+    JobHasNoIoHandle,
     JobIoError(io::Error),
 }
 
@@ -38,6 +40,9 @@ impl fmt::Display for OrchestratorError {
             OrchestratorError::ServiceAlreadyStopping => write!(f, "Service already stopped"),
             OrchestratorError::JobNotFound => write!(f, "Job not found"),
             OrchestratorError::JobIoError(error) => write!(f, "Job I/O error: {}", error),
+            OrchestratorError::JobHasNoIoHandle => {
+                write!(f, "Job has no handle for either stdin/stdout/stderr")
+            }
         }
     }
 }
@@ -60,11 +65,18 @@ pub struct Orchestrator {
     pub watched: Arc<Mutex<HashMap<String, Vec<Watched>>>>,
     messages_tx: Sender<OrchestratorMsg>,
     messages_rx: Receiver<OrchestratorMsg>,
+    pub io_router_requests: Sender<IoRouterRequest>,
 }
 
 impl Orchestrator {
     pub fn new(services: Services, logger: Logger) -> (Orchestrator, Sender<OrchestratorMsg>) {
         let (tx, rx) = mpsc::channel();
+        let (io_tx, io_rx) = mpsc::channel();
+        let io_logger = logger.clone();
+
+        thread::spawn(move || {
+            io_router::route(io_rx, io_logger);
+        });
 
         (
             Orchestrator {
@@ -74,6 +86,7 @@ impl Orchestrator {
                 watched: Arc::new(Mutex::new(HashMap::new())),
                 messages_tx: tx.clone(),
                 messages_rx: rx,
+                io_router_requests: io_tx,
             },
             tx,
         )
@@ -190,7 +203,13 @@ impl Orchestrator {
                                     res = match service {
                                         ServiceAction::Start(alias) => self.start_request(&alias),
                                         ServiceAction::Restart(alias) => {
-                                            self.stop_request(&alias, true, true)
+                                            match self.stop_request(&alias, true, true) {
+                                                // Service stopped error on restart is ok satus
+                                                Err(OrchestratorError::ServiceStopped) | Ok(_) => {
+                                                    Ok(())
+                                                }
+                                                err => err,
+                                            }
                                         }
                                         ServiceAction::Stop(alias) => {
                                             self.stop_request(&alias, true, false)
