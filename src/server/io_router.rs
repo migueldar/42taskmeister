@@ -21,7 +21,7 @@ struct Stdout {
 }
 
 impl Stdout {
-    fn read(&mut self, buf: &mut [u8]) -> Result<(), io::Error> {
+    fn forward(&mut self, buf: &mut [u8]) -> Result<(), io::Error> {
         match self.pipe.read(buf) {
             Ok(0) => Ok(()),
             Ok(bytes) => {
@@ -52,7 +52,7 @@ struct Stderr {
 }
 
 impl Stderr {
-    fn read(&mut self, buf: &mut [u8]) -> Result<(), io::Error> {
+    fn forward(&mut self, buf: &mut [u8]) -> Result<(), io::Error> {
         match self.pipe.read(buf) {
             Ok(0) => Ok(()),
             Ok(bytes) => {
@@ -75,11 +75,29 @@ impl Stderr {
     }
 }
 
+struct Stdin {
+    pipe: ChildStdin,
+    rx: Option<Receiver<Vec<u8>>>,
+}
+
+impl Stdin {
+    fn forward(&mut self) -> Result<(), io::Error> {
+        let Some(rx) = &self.rx else { return Ok(()) };
+
+        while let Ok(data) = rx.try_recv() {
+            if let Err(err) = self.pipe.write_all(&data) {
+                return Err(err);
+            }
+        }
+
+        Ok(())
+    }
+}
+
 pub struct Tee {
     stdout: Stdout,
     stderr: Stderr,
-    // stdin: ChildStdin,
-    // def_stdin: Stdio,
+    stdin: Stdin,
 }
 
 impl Tee {
@@ -88,10 +106,9 @@ impl Tee {
     // default value is the only way we need to use this tee moudle.
     pub fn new(
         stdout: ChildStdout,
-        // stdin: ChildStdin,
         stderr: ChildStderr,
+        stdin: ChildStdin,
         def_stdout: &str,
-        // def_stdin: &str,
         def_stderr: &str,
     ) -> Result<Tee, io::Error> {
         Ok(Tee {
@@ -112,28 +129,25 @@ impl Tee {
                 },
                 tx: None,
                 buff: VecDeque::with_capacity(READ_BUF_LEN * DEQUE_BUF_LEN),
-            }, // stdin,
-               // stderr,
-
-               // def_stdin: match def_stdin {
-               //     "stdin" => Stdio::inherit(),
-               //     "null" => Stdio::null(),
-               //     i => Stdio::from(OpenOptions::new().create(true).read(true).open(i)?),
-               // },
-               // def_stderr: match def_stderr {
-               //     "stderr" => Stdio::inherit(),
-               //     "null" => Stdio::null(),
-               //     o => Stdio::from(OpenOptions::new().create(true).write(true).open(o)?),
-               // },
+            },
+            stdin: Stdin {
+                pipe: stdin,
+                rx: None,
+            },
         })
     }
 }
 
 pub enum IoRouterRequest {
-    Create(String, ChildStdout, ChildStderr, String, String), // Alias, Stdout Pipe, Stdout Pipe, Default Stdout File, Default Stderr File
-    Remove(String),                                           // Alias
+    Create(String, ChildStdout, ChildStderr, ChildStdin, String, String), // Alias, Stdout Pipe, Stderr Pipe, Stdin Pipe, Default Stdout File, Default Stderr File
+    Remove(String),                                                       // Alias
     ReadBuff(String, Sender<(Vec<u8>, Vec<u8>)>), // Alias, Stdout Channel, Stderr Channel
-    StartForwardingStream(String, SyncSender<Vec<u8>>), // Alias, Channel
+    StartForwarding(
+        String,
+        SyncSender<Vec<u8>>,
+        SyncSender<Vec<u8>>,
+        Receiver<Vec<u8>>,
+    ), // Alias, Stdout Channel, Stderr Channel, Stdin Channel
     StopForwarding(String),                       // Alias
 }
 
@@ -144,9 +158,16 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
     loop {
         while let Ok(req) = requests.try_recv() {
             match req {
-                IoRouterRequest::StartForwardingStream(alias, resp_tx) => {
+                IoRouterRequest::StartForwarding(
+                    alias,
+                    stdout_channel,
+                    stderr_channel,
+                    stdin_channel,
+                ) => {
                     if let Some(tee) = ios.get_mut(&alias) {
-                        tee.stdout.tx = Some(resp_tx);
+                        tee.stdout.tx = Some(stdout_channel);
+                        tee.stderr.tx = Some(stderr_channel);
+                        tee.stdin.rx = Some(stdin_channel);
                     }
                 }
                 IoRouterRequest::ReadBuff(alias, resp_tx) =>
@@ -172,10 +193,11 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
                     if let Some(tee) = ios.get_mut(&alias) {
                         tee.stdout.tx = None;
                         tee.stderr.tx = None;
+                        tee.stdin.rx = None;
                     }
                 }
-                IoRouterRequest::Create(alias, stdout, stderr, def_stdout, def_stderr) => {
-                    match Tee::new(stdout, stderr, &def_stdout, &def_stderr) {
+                IoRouterRequest::Create(alias, stdout, stderr, stdin, def_stdout, def_stderr) => {
+                    match Tee::new(stdout, stderr, stdin, &def_stdout, &def_stderr) {
                         Ok(tee) => {
                             ios.entry(alias).or_insert(tee);
                         }
@@ -192,12 +214,16 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
             let mut buf = [0; READ_BUF_LEN];
 
             tee.stdout
-                .read(&mut buf)
+                .forward(&mut buf)
                 .inspect_err(|err| logger::error!(logger, "Reading from stdout: {err}"))
                 .ok();
             tee.stderr
-                .read(&mut buf)
+                .forward(&mut buf)
                 .inspect_err(|err| logger::error!(logger, "Reading from stderr: {err}"))
+                .ok();
+            tee.stdin
+                .forward()
+                .inspect_err(|err| logger::error!(logger, "Writing to stdin: {err}"))
                 .ok();
         }
         thread::sleep(period);
@@ -219,6 +245,7 @@ pub trait RouterRequest {
         alias: &str,
         stdout: ChildStdout,
         stderr: ChildStderr,
+        stdin: ChildStdin,
         def_stdout: &str,
         def_stderr: &str,
     );
@@ -250,6 +277,7 @@ impl RouterRequest for Sender<IoRouterRequest> {
         alias: &str,
         stdout: ChildStdout,
         stderr: ChildStderr,
+        stdin: ChildStdin,
         def_stdout: &str,
         def_stderr: &str,
     ) {
@@ -257,6 +285,7 @@ impl RouterRequest for Sender<IoRouterRequest> {
             alias.to_string(),
             stdout,
             stderr,
+            stdin,
             def_stdout.to_string(),
             def_stderr.to_string(),
         ));

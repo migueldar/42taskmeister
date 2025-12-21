@@ -92,9 +92,20 @@ impl Orchestrator {
             .ok_or(OrchestratorError::JobHasNoIoHandle)?;
         set_fd_non_blocking(&stderr);
 
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or(OrchestratorError::JobHasNoIoHandle)?;
+
         // Create an I/O handler
-        self.io_router_requests
-            .create(alias, stdout, stderr, &service.stdout, &service.stderr);
+        self.io_router_requests.create(
+            alias,
+            stdout,
+            stderr,
+            stdin,
+            &service.stdout,
+            &service.stderr,
+        );
 
         // Add handler to the watched jobs
         let mut watched = self.watched.lock().unwrap();
@@ -258,8 +269,11 @@ impl Orchestrator {
 PIDs: {}
 Configuration: {}
 Stdout:
+
 {}
+
 Stderr:
+
 {}"#,
             job.status,
             job.started.as_ref().map_or("[]", |s| s),
