@@ -37,13 +37,13 @@ fn command_to_action(req: &Request) -> Option<ServiceAction> {
         "stop" | "sp" => Some(ServiceAction::Stop(alias)),
         "restart" | "rs" => Some(ServiceAction::Restart(alias)),
         "status" | "stat" => Some(ServiceAction::Status(alias)),
+        "attach" | "at" => Some(ServiceAction::Attach(alias)),
         "reload" | "rl" => Some(ServiceAction::Reload),
         "help" | "?" => Some(ServiceAction::Help),
         _ => None,
     }
 }
 
-// this is here for client testing purposes
 fn process_request(
     req: &Request,
     requests_tx: Sender<OrchestratorMsg>,
@@ -65,15 +65,7 @@ fn process_request(
         .inspect_err(|err| logger::error!(logger, "Sending request to orchestrator {err}"))
         .ok();
 
-    let mut response = vec![];
-    for resp in rx {
-        response.push(match resp {
-            Ok(resp_msg) => ResponsePart::Info(resp_msg),
-            Err(err) => ResponsePart::Error(err.to_string()),
-        })
-    }
-
-    response
+    rx.iter().collect()
 }
 
 fn main() -> Result<(), Box<dyn Error>> {

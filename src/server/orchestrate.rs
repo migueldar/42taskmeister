@@ -17,6 +17,7 @@ use std::{
     thread,
     time::Duration,
 };
+use taskmeister::ResponsePart;
 
 #[derive(Debug)]
 pub enum OrchestratorError {
@@ -50,7 +51,7 @@ impl fmt::Display for OrchestratorError {
 #[derive(Debug)]
 pub struct OrchestratorRequest {
     pub action: ServiceAction,
-    pub response_channel: Sender<Result<String, OrchestratorError>>,
+    pub response_channel: Sender<ResponsePart>,
 }
 
 pub enum OrchestratorMsg {
@@ -186,16 +187,14 @@ impl Orchestrator {
         while let Some(message) = self.messages_rx.iter().next() {
             match message {
                 OrchestratorMsg::Request(request) => {
-                    let result = match request.action {
-                        ServiceAction::Start(alias) => {
-                            self.start_request(&alias).map(|_| "OK".to_string())
+                    let result: ResponsePart = match request.action {
+                        ServiceAction::Start(alias) => self.start_request(&alias).into(),
+                        ServiceAction::Restart(alias) => {
+                            self.stop_request(&alias, false, true).into()
                         }
-                        ServiceAction::Restart(alias) => self
-                            .stop_request(&alias, false, true)
-                            .map(|_| "OK".to_string()),
-                        ServiceAction::Stop(alias) => self
-                            .stop_request(&alias, false, false)
-                            .map(|_| "OK".to_string()),
+                        ServiceAction::Stop(alias) => {
+                            self.stop_request(&alias, false, false).into()
+                        }
                         ServiceAction::Reload => match self.services.update() {
                             Ok(up_services) => {
                                 let mut res = Ok(());
@@ -228,9 +227,12 @@ impl Orchestrator {
                                 Err(OrchestratorError::ServiceUpdate)
                             }
                         }
-                        .map(|_| "OK".to_string()),
-                        ServiceAction::Status(alias) => self.job_status(&alias),
-                        ServiceAction::Help => Ok(CLI_HELP.to_string()),
+                        .into(),
+                        ServiceAction::Status(alias) => self.job_status(&alias).into(),
+                        ServiceAction::Help => {
+                            Ok::<String, OrchestratorError>(CLI_HELP.to_string()).into()
+                        }
+                        ServiceAction::Attach(alias) => self.attach_job(&alias).into(),
                     };
 
                     request

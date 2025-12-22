@@ -288,6 +288,10 @@ Stderr:
             stderr,
         ))
     }
+
+    pub fn attach_job(&self, alias: &str) -> Result<(), OrchestratorError> {
+        Ok(())
+    }
 }
 
 // #################### UTILS ####################

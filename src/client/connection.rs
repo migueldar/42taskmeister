@@ -35,7 +35,7 @@ fn line_to_request(line: &str) -> Request {
 
 fn process_response(res: &Response, exit_code: &mut ExitCode) {
     *exit_code = ExitCode::OK;
-    for r in res.iter() {
+    for r in res {
         println!("{}", r);
         if !matches!(exit_code, ExitCode::COMMANDERROR) && matches!(r, ResponsePart::Error(_)) {
             *exit_code = ExitCode::COMMANDERROR;
