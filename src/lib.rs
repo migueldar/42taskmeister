@@ -15,6 +15,7 @@ pub type Response = Vec<ResponsePart>;
 pub enum ResponsePart {
     Error(String),
     Info(String),
+    Stream(Vec<u8>),
 }
 
 impl std::fmt::Display for ResponsePart {
@@ -22,6 +23,7 @@ impl std::fmt::Display for ResponsePart {
         match self {
             ResponsePart::Info(message) => write!(f, "{}", message),
             ResponsePart::Error(message) => write!(f, "Error: {}", message),
+            ResponsePart::Stream(items) => write!(f, "{}", String::from_utf8_lossy(&items)),
         }
     }
 }
@@ -39,6 +41,12 @@ impl OkPart for () {
 impl OkPart for String {
     fn into_response(self) -> ResponsePart {
         ResponsePart::Info(self)
+    }
+}
+
+impl OkPart for Vec<u8> {
+    fn into_response(self) -> ResponsePart {
+        ResponsePart::Stream(self)
     }
 }
 

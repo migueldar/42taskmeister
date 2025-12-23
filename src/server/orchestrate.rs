@@ -98,6 +98,18 @@ impl Orchestrator {
         self.jobs.get(alias).map(|job| job.status.clone())
     }
 
+    pub fn set_job_status(&mut self, alias: &str, status: JobStatus) {
+        if let Some(job) = self.jobs.get_mut(alias) {
+            job.status = status;
+        }
+    }
+
+    pub fn set_job_timestamp(&mut self, alias: &str) {
+        if let Some(job) = self.jobs.get_mut(alias) {
+            job.started = Some(logger::timestamp());
+        }
+    }
+
     pub fn consume_job_flags(&mut self, alias: &str) -> JobFlags {
         let Some(job) = self.jobs.get_mut(alias) else {
             return JobFlags::default();
@@ -232,7 +244,11 @@ impl Orchestrator {
                         ServiceAction::Help => {
                             Ok::<String, OrchestratorError>(CLI_HELP.to_string()).into()
                         }
-                        ServiceAction::Attach(alias) => self.attach_job(&alias).into(),
+                        ServiceAction::Attach(alias) => {
+                            self.attach_job(&alias, request.response_channel.clone());
+                            // Do not send a normal response, just stream
+                            continue;
+                        }
                     };
 
                     request

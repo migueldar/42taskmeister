@@ -13,12 +13,12 @@ use serde_json::Deserializer;
 use service::{ServiceAction, Services};
 use std::{
     error::Error,
-    io::Write,
+    io::{self, Write},
     net::{TcpListener, TcpStream},
     sync::mpsc::{self, Sender},
     thread::{self},
 };
-use taskmeister::{Request, Response, ResponsePart, dir_utils};
+use taskmeister::{Request, ResponsePart, dir_utils};
 
 pub const CLI_HELP: &str = r#"Commands:
 	start [st]	Start a service
@@ -47,25 +47,40 @@ fn command_to_action(req: &Request) -> Option<ServiceAction> {
 fn process_request(
     req: &Request,
     requests_tx: Sender<OrchestratorMsg>,
-    logger: Logger,
-) -> Response {
-    let (tx, rx) = mpsc::channel();
+    mut socket_tx: TcpStream,
+) -> Result<(), Box<dyn Error>> {
     let Some(action) = command_to_action(req) else {
-        return vec![ResponsePart::Error(format!(
-            "Command [{}] not found",
-            req.command
-        ))];
+        socket_tx.write(
+            serde_json::to_string(&[ResponsePart::Error(format!(
+                "Command [{}] not found",
+                req.command
+            ))])?
+            .as_bytes(),
+        )?;
+        return Ok(());
     };
 
-    requests_tx
-        .send(OrchestratorMsg::Request(OrchestratorRequest {
-            action,
-            response_channel: tx,
-        }))
-        .inspect_err(|err| logger::error!(logger, "Sending request to orchestrator {err}"))
-        .ok();
+    let (tx, rx) = mpsc::channel();
 
-    rx.iter().collect()
+    requests_tx.send(OrchestratorMsg::Request(OrchestratorRequest {
+        action: action.clone(),
+        response_channel: tx,
+    }))?;
+
+    match action {
+        ServiceAction::Attach(_) => {
+            for data in rx {
+                socket_tx.write(serde_json::to_string(&[data])?.as_bytes())?;
+            }
+        }
+        _ => {
+            socket_tx.write(
+                serde_json::to_string(&rx.iter().collect::<Vec<ResponsePart>>())?.as_bytes(),
+            )?;
+        }
+    }
+
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -83,6 +98,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         logger.clone(),
     );
 
+    // TODO: manage clean exit by taking the handle
     thread::spawn(move || {
         orchestrator.orchestrate();
     });
@@ -93,18 +109,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         let requests_tx = requests_tx.clone();
         let logger = logger.clone();
 
-        let handle = thread::spawn(move || -> std::io::Result<()> {
+        let handle = thread::spawn(move || -> io::Result<()> {
             let deserializer = Deserializer::from_reader(&sock_read).into_iter::<Request>();
-            let mut sock_write: TcpStream = sock_read.try_clone()?;
 
             for req in deserializer {
                 let Ok(req) = req else {
                     logger::warn!(logger, "Deserializing {req:?}");
                     continue;
                 };
+
                 logger::info!(logger, "{req:?}");
-                let res = process_request(&req, requests_tx.clone(), logger.clone());
-                sock_write.write(serde_json::to_string(&res)?.as_bytes())?;
+
+                if let Err(err) = process_request(&req, requests_tx.clone(), sock_read.try_clone()?)
+                {
+                    logger::error!(logger, "Processing request: {err}");
+                }
             }
 
             Ok(())

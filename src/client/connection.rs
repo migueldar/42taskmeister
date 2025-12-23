@@ -33,13 +33,24 @@ fn line_to_request(line: &str) -> Request {
     ret
 }
 
-fn process_response(res: &Response, exit_code: &mut ExitCode) {
+fn process_response(res: &Response, exit_code: &mut ExitCode) -> bool {
     *exit_code = ExitCode::OK;
+    let mut last_message: &ResponsePart = &ResponsePart::Info("OK".to_string());
+
     for r in res {
         println!("{}", r);
+
+        last_message = r;
+
         if !matches!(exit_code, ExitCode::COMMANDERROR) && matches!(r, ResponsePart::Error(_)) {
             *exit_code = ExitCode::COMMANDERROR;
         }
+    }
+
+    if matches!(last_message, ResponsePart::Stream(_)) {
+        true
+    } else {
+        false
     }
 }
 
@@ -58,8 +69,13 @@ impl Connection {
         let req = line_to_request(line);
         self.sock_write
             .write(serde_json::to_string(&req)?.as_bytes())?;
-        let res = Response::deserialize(&mut self.deserializer)?;
-        process_response(&res, exit_code);
+
+        let mut streaming = true;
+        while streaming {
+            let res = Response::deserialize(&mut self.deserializer)?;
+            streaming = process_response(&res, exit_code);
+        }
+
         Ok(())
     }
 }

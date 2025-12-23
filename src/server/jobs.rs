@@ -4,10 +4,17 @@
 
 use libc;
 use logger::{self, LogLevel};
-use std::{io, os::fd::AsRawFd, time::Duration};
+use std::{
+    io,
+    os::fd::AsRawFd,
+    sync::mpsc::{self, Sender},
+    thread,
+    time::Duration,
+};
+use taskmeister::ResponsePart;
 
 use crate::{
-    io_router::RouterRequest,
+    io_router::{self, RouterRequest},
     orchestrate::{Orchestrator, OrchestratorError},
     watcher::{Watched, WatchedTimeout},
 };
@@ -188,12 +195,11 @@ impl Orchestrator {
 
         // If response is positive, start the job
         if let Ok(_) = response {
-            // Update job
-            job.status = JobStatus::Starting;
-            job.started = Some(logger::timestamp());
-
             response = match self.start_job(alias) {
                 Ok(res) => {
+                    self.set_job_status(alias, JobStatus::Starting);
+                    self.set_job_timestamp(alias);
+
                     if let Some(old_watched_jobs) = res {
                         // TODO: Do something with old jobs in this case?
                         logger::warn!(
@@ -289,8 +295,33 @@ Stderr:
         ))
     }
 
-    pub fn attach_job(&self, alias: &str) -> Result<(), OrchestratorError> {
-        Ok(())
+    pub fn attach_job(&self, alias: &str, tx: Sender<ResponsePart>) {
+        let (router_tx, router_rx) = mpsc::sync_channel(io_router::IO_ROUTER_READ_BUF_LEN);
+        let logger = self.logger.clone();
+        let io_router_requests = self.io_router_requests.clone();
+        let alias = alias.to_string();
+
+        io_router_requests.start_forwarding(&alias, router_tx.clone(), router_tx);
+
+        thread::spawn(move || {
+            let result =
+                router_rx
+                    .iter()
+                    .find_map(|data| match tx.send(ResponsePart::Stream(data)) {
+                        Ok(_) => None,
+                        Err(err) => Some(err),
+                    });
+
+            // Check the result
+            if let Some(err) = result {
+                logger::error!(logger, "Streaming: {err}");
+                let _ = tx.send(ResponsePart::Error(err.to_string()));
+            } else {
+                let _ = tx.send(ResponsePart::Info("OK".to_string()));
+            }
+
+            io_router_requests.stop_forwarding(&alias);
+        });
     }
 }
 

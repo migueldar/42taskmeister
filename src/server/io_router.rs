@@ -10,7 +10,7 @@ use std::{
 
 use logger::{LogLevel, Logger};
 
-const READ_BUF_LEN: usize = 1024;
+pub const IO_ROUTER_READ_BUF_LEN: usize = 1024;
 const DEQUE_BUF_LEN: usize = 10;
 
 struct Stdout {
@@ -94,7 +94,7 @@ impl Stdin {
     }
 }
 
-pub struct Tee {
+struct Tee {
     stdout: Stdout,
     stderr: Stderr,
     stdin: Stdin,
@@ -104,7 +104,7 @@ impl Tee {
     // Create a new tee with default values. This way the subsequent functions only
     // need to call to a give buffer and the default value. TODO: Check if the
     // default value is the only way we need to use this tee moudle.
-    pub fn new(
+    fn new(
         stdout: ChildStdout,
         stderr: ChildStderr,
         stdin: ChildStdin,
@@ -119,7 +119,7 @@ impl Tee {
                     o => Some(OpenOptions::new().create(true).write(true).open(o)?),
                 },
                 tx: None,
-                buff: VecDeque::with_capacity(READ_BUF_LEN * DEQUE_BUF_LEN),
+                buff: VecDeque::with_capacity(IO_ROUTER_READ_BUF_LEN * DEQUE_BUF_LEN),
             },
             stderr: Stderr {
                 pipe: stderr,
@@ -128,7 +128,7 @@ impl Tee {
                     o => Some(OpenOptions::new().create(true).write(true).open(o)?),
                 },
                 tx: None,
-                buff: VecDeque::with_capacity(READ_BUF_LEN * DEQUE_BUF_LEN),
+                buff: VecDeque::with_capacity(IO_ROUTER_READ_BUF_LEN * DEQUE_BUF_LEN),
             },
             stdin: Stdin {
                 pipe: stdin,
@@ -146,7 +146,7 @@ pub enum IoRouterRequest {
         String,
         SyncSender<Vec<u8>>,
         SyncSender<Vec<u8>>,
-        Receiver<Vec<u8>>,
+        // Receiver<Vec<u8>>,
     ), // Alias, Stdout Channel, Stderr Channel, Stdin Channel
     StopForwarding(String),                       // Alias
 }
@@ -162,12 +162,12 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
                     alias,
                     stdout_channel,
                     stderr_channel,
-                    stdin_channel,
+                    // stdin_channel,
                 ) => {
                     if let Some(tee) = ios.get_mut(&alias) {
                         tee.stdout.tx = Some(stdout_channel);
                         tee.stderr.tx = Some(stderr_channel);
-                        tee.stdin.rx = Some(stdin_channel);
+                        // tee.stdin.rx = Some(stdin_channel);
                     }
                 }
                 IoRouterRequest::ReadBuff(alias, resp_tx) =>
@@ -211,7 +211,7 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
         }
 
         for (_, tee) in &mut ios {
-            let mut buf = [0; READ_BUF_LEN];
+            let mut buf = [0; IO_ROUTER_READ_BUF_LEN];
 
             tee.stdout
                 .forward(&mut buf)
@@ -250,6 +250,13 @@ pub trait RouterRequest {
         def_stderr: &str,
     );
     fn remove(&self, alias: &str);
+    fn start_forwarding(
+        &self,
+        alias: &str,
+        stdout: SyncSender<Vec<u8>>,
+        stderr: SyncSender<Vec<u8>>,
+    );
+    fn stop_forwarding(&self, alias: &str);
 }
 
 impl RouterRequest for Sender<IoRouterRequest> {
@@ -293,5 +300,22 @@ impl RouterRequest for Sender<IoRouterRequest> {
 
     fn remove(&self, alias: &str) {
         let _ = self.send(IoRouterRequest::Remove(alias.to_string()));
+    }
+
+    fn start_forwarding(
+        &self,
+        alias: &str,
+        stdout: SyncSender<Vec<u8>>,
+        stderr: SyncSender<Vec<u8>>,
+    ) {
+        let _ = self.send(IoRouterRequest::StartForwarding(
+            alias.to_string(),
+            stdout,
+            stderr,
+        ));
+    }
+
+    fn stop_forwarding(&self, alias: &str) {
+        let _ = self.send(IoRouterRequest::StopForwarding(alias.to_string()));
     }
 }
