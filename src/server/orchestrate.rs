@@ -28,6 +28,9 @@ pub enum OrchestratorError {
     ServiceAlreadyStopping,
     JobNotFound,
     JobHasNoIoHandle,
+    JobAlreadyAttached,
+    InternalChannelSendError,
+    InternalChannelReceiveError,
     JobIoError(io::Error),
 }
 
@@ -44,6 +47,11 @@ impl fmt::Display for OrchestratorError {
             OrchestratorError::JobHasNoIoHandle => {
                 write!(f, "Job has no handle for either stdin/stdout/stderr")
             }
+            OrchestratorError::JobAlreadyAttached => {
+                write!(f, "Job already attached to another client")
+            }
+            OrchestratorError::InternalChannelSendError => write!(f, "Internal channel send"),
+            OrchestratorError::InternalChannelReceiveError => write!(f, "Internal channel receive"),
         }
     }
 }
@@ -245,9 +253,14 @@ impl Orchestrator {
                             Ok::<String, OrchestratorError>(CLI_HELP.to_string()).into()
                         }
                         ServiceAction::Attach(alias) => {
-                            self.attach_job(&alias, request.response_channel.clone());
-                            // Do not send a normal response, just stream
-                            continue;
+                            if let Err(err) =
+                                self.attach_job(&alias, request.response_channel.clone())
+                            {
+                                Err::<(), OrchestratorError>(err).into()
+                            } else {
+                                // Do not send a normal response, just stream
+                                continue;
+                            }
                         }
                     };
 

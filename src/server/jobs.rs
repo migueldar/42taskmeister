@@ -295,13 +295,17 @@ Stderr:
         ))
     }
 
-    pub fn attach_job(&self, alias: &str, tx: Sender<ResponsePart>) {
+    pub fn attach_job(
+        &self,
+        alias: &str,
+        tx: Sender<ResponsePart>,
+    ) -> Result<(), OrchestratorError> {
         let (router_tx, router_rx) = mpsc::sync_channel(io_router::IO_ROUTER_READ_BUF_LEN);
         let logger = self.logger.clone();
         let io_router_requests = self.io_router_requests.clone();
         let alias = alias.to_string();
 
-        io_router_requests.start_forwarding(&alias, router_tx.clone(), router_tx);
+        io_router_requests.start_forwarding(&alias, router_tx.clone(), router_tx)?;
 
         thread::spawn(move || {
             let result =
@@ -317,11 +321,13 @@ Stderr:
                 logger::error!(logger, "Streaming: {err}");
                 let _ = tx.send(ResponsePart::Error(err.to_string()));
             } else {
-                let _ = tx.send(ResponsePart::Info("OK".to_string()));
+                let _ = tx.send(ResponsePart::Info("OK [End Of Stream]".to_string()));
             }
 
             io_router_requests.stop_forwarding(&alias);
         });
+
+        Ok(())
     }
 }
 

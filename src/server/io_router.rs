@@ -10,6 +10,8 @@ use std::{
 
 use logger::{LogLevel, Logger};
 
+use crate::orchestrate::OrchestratorError;
+
 pub const IO_ROUTER_READ_BUF_LEN: usize = 1024;
 const DEQUE_BUF_LEN: usize = 10;
 
@@ -146,7 +148,7 @@ pub enum IoRouterRequest {
         String,
         SyncSender<Vec<u8>>,
         SyncSender<Vec<u8>>,
-        // Receiver<Vec<u8>>,
+        Sender<Result<(), OrchestratorError>>, // Receiver<Vec<u8>>,
     ), // Alias, Stdout Channel, Stderr Channel, Stdin Channel
     StopForwarding(String),                       // Alias
 }
@@ -162,12 +164,24 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
                     alias,
                     stdout_channel,
                     stderr_channel,
+                    resp_channel,
                     // stdin_channel,
                 ) => {
-                    if let Some(tee) = ios.get_mut(&alias) {
-                        tee.stdout.tx = Some(stdout_channel);
-                        tee.stderr.tx = Some(stderr_channel);
+                    let result = resp_channel.send(if let Some(tee) = ios.get_mut(&alias) {
+                        if matches!(tee.stdout.tx, Some(_)) || matches!(tee.stderr.tx, Some(_)) {
+                            Err(OrchestratorError::JobAlreadyAttached)
+                        } else {
+                            tee.stdout.tx = Some(stdout_channel);
+                            tee.stderr.tx = Some(stderr_channel);
+                            Ok(())
+                        }
                         // tee.stdin.rx = Some(stdin_channel);
+                    } else {
+                        Err(OrchestratorError::JobNotFound)
+                    });
+
+                    if let Err(err) = result {
+                        logger::error!(logger, "Sending to channel {err}");
                     }
                 }
                 IoRouterRequest::ReadBuff(alias, resp_tx) =>
@@ -255,7 +269,7 @@ pub trait RouterRequest {
         alias: &str,
         stdout: SyncSender<Vec<u8>>,
         stderr: SyncSender<Vec<u8>>,
-    );
+    ) -> Result<(), OrchestratorError>;
     fn stop_forwarding(&self, alias: &str);
 }
 
@@ -307,12 +321,19 @@ impl RouterRequest for Sender<IoRouterRequest> {
         alias: &str,
         stdout: SyncSender<Vec<u8>>,
         stderr: SyncSender<Vec<u8>>,
-    ) {
+    ) -> Result<(), OrchestratorError> {
+        let (resp_tx, resp_rx) = mpsc::channel();
+
         let _ = self.send(IoRouterRequest::StartForwarding(
             alias.to_string(),
             stdout,
             stderr,
+            resp_tx,
         ));
+
+        resp_rx
+            .recv()
+            .unwrap_or(Err(OrchestratorError::InternalChannelReceiveError))
     }
 
     fn stop_forwarding(&self, alias: &str) {

@@ -104,6 +104,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
 
     let listen_sock: TcpListener = TcpListener::bind(config.server_addr)?;
+    let mut handlers = Vec::new();
     loop {
         let sock_read: TcpStream = listen_sock.accept()?.0;
         let requests_tx = requests_tx.clone();
@@ -129,6 +130,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             Ok(())
         });
 
-        let _ = handle.join().unwrap();
+        handlers.push(handle);
     }
+
+    // TODO: Manage signals?
+    // for handle in handlers {
+    //     handle.join().unwrap();
+    // }
 }
