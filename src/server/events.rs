@@ -56,6 +56,9 @@ impl Orchestrator {
             }
 
             JobStatus::Finished(exit_code) => 'finished: {
+                // End the forwarding cleanly if any
+                self.io_router_requests.stop_forwarding(&event.alias);
+
                 // Remove the I/O handler
                 self.io_router_requests.remove(&event.alias);
 

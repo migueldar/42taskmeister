@@ -23,9 +23,10 @@ struct Stdout {
 }
 
 impl Stdout {
-    fn forward(&mut self, buf: &mut [u8]) -> Result<(), io::Error> {
+    // Return Ok(false) if we do not want to continue reading
+    fn forward(&mut self, buf: &mut [u8]) -> Result<bool, io::Error> {
         match self.pipe.read(buf) {
-            Ok(0) => Ok(()),
+            Ok(0) => Ok(false),
             Ok(bytes) => {
                 // Always push into the ring buffer
                 ring_buf_push(&mut self.buff, buf[..bytes].to_vec());
@@ -38,9 +39,9 @@ impl Stdout {
                     let _ = stdout.write(&buf[..bytes]);
                 }
 
-                Ok(())
+                Ok(true)
             }
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(false),
             Err(err) => Err(err),
         }
     }
@@ -54,9 +55,10 @@ struct Stderr {
 }
 
 impl Stderr {
-    fn forward(&mut self, buf: &mut [u8]) -> Result<(), io::Error> {
+    // Return Ok(false) if we do not want to continue reading
+    fn forward(&mut self, buf: &mut [u8]) -> Result<bool, io::Error> {
         match self.pipe.read(buf) {
-            Ok(0) => Ok(()),
+            Ok(0) => Ok(false),
             Ok(bytes) => {
                 // Always push into the ring buffer
                 ring_buf_push(&mut self.buff, buf[..bytes].to_vec());
@@ -69,9 +71,9 @@ impl Stderr {
                     let _ = stderr.write(&buf[..bytes]);
                 }
 
-                Ok(())
+                Ok(true)
             }
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(false),
             Err(err) => Err(err),
         }
     }
@@ -156,6 +158,7 @@ pub enum IoRouterRequest {
 pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
     let mut ios: HashMap<String, Tee> = HashMap::new();
     let period = Duration::from_millis(100);
+    let mut buff = [0; IO_ROUTER_READ_BUF_LEN];
 
     loop {
         while let Ok(req) = requests.try_recv() {
@@ -168,7 +171,7 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
                     // stdin_channel,
                 ) => {
                     let result = resp_channel.send(if let Some(tee) = ios.get_mut(&alias) {
-                        if matches!(tee.stdout.tx, Some(_)) || matches!(tee.stderr.tx, Some(_)) {
+                        if matches!(tee.stdout.tx, Some(_)) {
                             Err(OrchestratorError::JobAlreadyAttached)
                         } else {
                             tee.stdout.tx = Some(stdout_channel);
@@ -205,9 +208,16 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
                 }
                 IoRouterRequest::StopForwarding(alias) => {
                     if let Some(tee) = ios.get_mut(&alias) {
-                        tee.stdout.tx = None;
-                        tee.stderr.tx = None;
-                        tee.stdin.rx = None;
+                        if matches!(tee.stdout.tx, Some(_)) {
+                            // First drain all the pipes
+                            while tee.stdout.forward(&mut buff).unwrap_or(false) {}
+                            while tee.stderr.forward(&mut buff).unwrap_or(false) {}
+
+                            // Then remove the forward channel
+                            tee.stdout.tx = None;
+                            tee.stderr.tx = None;
+                            tee.stdin.rx = None;
+                        }
                     }
                 }
                 IoRouterRequest::Create(alias, stdout, stderr, stdin, def_stdout, def_stderr) => {
@@ -225,14 +235,12 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
         }
 
         for (_, tee) in &mut ios {
-            let mut buf = [0; IO_ROUTER_READ_BUF_LEN];
-
             tee.stdout
-                .forward(&mut buf)
+                .forward(&mut buff)
                 .inspect_err(|err| logger::error!(logger, "Reading from stdout: {err}"))
                 .ok();
             tee.stderr
-                .forward(&mut buf)
+                .forward(&mut buff)
                 .inspect_err(|err| logger::error!(logger, "Reading from stderr: {err}"))
                 .ok();
             tee.stdin
