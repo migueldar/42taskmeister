@@ -16,6 +16,7 @@ pub enum ServiceAction {
     Stop(String),
     Status(String),
     Attach(String),
+    Detach(String),
     Reload,
     Help,
 }

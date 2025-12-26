@@ -25,6 +25,8 @@ pub const CLI_HELP: &str = r#"Commands:
 	stop [sp]	Stop a job
 	restart [rs]	Restart a job
 	status [stat]	Show the current status of a job
+	attach [at]	Attach the job to the current client
+	detach [dt] 	Detach the job from every client
 	reload [rl]	Reload the configuration for the services
 	help [?]	Show this help
 "#;
@@ -38,6 +40,7 @@ fn command_to_action(req: &Request) -> Option<ServiceAction> {
         "restart" | "rs" => Some(ServiceAction::Restart(alias)),
         "status" | "stat" => Some(ServiceAction::Status(alias)),
         "attach" | "at" => Some(ServiceAction::Attach(alias)),
+        "detach" | "dt" => Some(ServiceAction::Detach(alias)),
         "reload" | "rl" => Some(ServiceAction::Reload),
         "help" | "?" => Some(ServiceAction::Help),
         _ => None,

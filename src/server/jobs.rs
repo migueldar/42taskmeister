@@ -324,10 +324,17 @@ Stderr:
                 let _ = tx.send(ResponsePart::Info("OK [End Of Stream]".to_string()));
             }
 
-            io_router_requests.stop_forwarding(&alias);
+            io_router_requests
+                .stop_forwarding(&alias)
+                .inspect_err(|err| logger::error!(logger, "Stop forwarding: {err}"))
+                .ok();
         });
 
         Ok(())
+    }
+
+    pub fn detach_job(&self, alias: &str) -> Result<(), OrchestratorError> {
+        self.io_router_requests.stop_forwarding(alias)
     }
 }
 

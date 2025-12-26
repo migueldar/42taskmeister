@@ -262,6 +262,7 @@ impl Orchestrator {
                                 continue;
                             }
                         }
+                        ServiceAction::Detach(alias) => self.detach_job(&alias).into(),
                     };
 
                     request

@@ -14,6 +14,7 @@ use crate::orchestrate::OrchestratorError;
 
 pub const IO_ROUTER_READ_BUF_LEN: usize = 1024;
 const DEQUE_BUF_LEN: usize = 10;
+const DRAIN_TIMES: usize = 100;
 
 struct Stdout {
     pipe: ChildStdout,
@@ -209,9 +210,16 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
                 IoRouterRequest::StopForwarding(alias) => {
                     if let Some(tee) = ios.get_mut(&alias) {
                         if matches!(tee.stdout.tx, Some(_)) {
-                            // First drain all the pipes
-                            while tee.stdout.forward(&mut buff).unwrap_or(false) {}
-                            while tee.stderr.forward(&mut buff).unwrap_or(false) {}
+                            // First drain all the pipes up to times
+                            let mut times = DRAIN_TIMES;
+                            while tee.stdout.forward(&mut buff).unwrap_or(false) && times != 0 {
+                                times -= 1;
+                            }
+
+                            let mut times = DRAIN_TIMES;
+                            while tee.stderr.forward(&mut buff).unwrap_or(false) && times != 0 {
+                                times -= 1;
+                            }
 
                             // Then remove the forward channel
                             tee.stdout.tx = None;
@@ -278,7 +286,7 @@ pub trait RouterRequest {
         stdout: SyncSender<Vec<u8>>,
         stderr: SyncSender<Vec<u8>>,
     ) -> Result<(), OrchestratorError>;
-    fn stop_forwarding(&self, alias: &str);
+    fn stop_forwarding(&self, alias: &str) -> Result<(), OrchestratorError>;
 }
 
 impl RouterRequest for Sender<IoRouterRequest> {
@@ -332,19 +340,21 @@ impl RouterRequest for Sender<IoRouterRequest> {
     ) -> Result<(), OrchestratorError> {
         let (resp_tx, resp_rx) = mpsc::channel();
 
-        let _ = self.send(IoRouterRequest::StartForwarding(
+        self.send(IoRouterRequest::StartForwarding(
             alias.to_string(),
             stdout,
             stderr,
             resp_tx,
-        ));
+        ))
+        .map_err(|_| OrchestratorError::InternalChannelSendError)?;
 
         resp_rx
             .recv()
             .unwrap_or(Err(OrchestratorError::InternalChannelReceiveError))
     }
 
-    fn stop_forwarding(&self, alias: &str) {
-        let _ = self.send(IoRouterRequest::StopForwarding(alias.to_string()));
+    fn stop_forwarding(&self, alias: &str) -> Result<(), OrchestratorError> {
+        self.send(IoRouterRequest::StopForwarding(alias.to_string()))
+            .map_err(|_| OrchestratorError::InternalChannelSendError)
     }
 }
