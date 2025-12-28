@@ -5,13 +5,14 @@
 use libc;
 use logger::{self, LogLevel};
 use std::{
-    io,
+    io::{self, Write},
     os::fd::AsRawFd,
+    process::ChildStdin,
     sync::mpsc::{self, Sender},
     thread,
     time::Duration,
 };
-use taskmeister::ResponsePart;
+use taskmeister::{self, ResponsePart};
 
 use crate::{
     io_router::{self, RouterRequest},
@@ -47,6 +48,7 @@ pub struct Job {
     pub retries: u8,
     pub last_exit_code: i32, // TODO: Check the need of this
     pub flags: JobFlags,
+    pub stdin: Option<ChildStdin>,
 }
 
 #[derive(PartialEq, Clone, Debug)]
@@ -70,13 +72,14 @@ impl Orchestrator {
             last_exit_code: 0,
             flags: JobFlags::default(),
             started: None,
+            stdin: None,
         }))
     }
 
     fn start_job(&mut self, alias: &str) -> Result<Option<Vec<Watched>>, OrchestratorError> {
         let service = self
             .get_services()
-            .get(&alias)
+            .get(alias)
             .cloned()
             .ok_or(OrchestratorError::ServiceNotFound)?;
 
@@ -91,28 +94,25 @@ impl Orchestrator {
             .stdout
             .take()
             .ok_or(OrchestratorError::JobHasNoIoHandle)?;
-        set_fd_non_blocking(&stdout);
+        taskmeister::set_fd_non_blocking(&stdout);
 
         let stderr = child
             .stderr
             .take()
             .ok_or(OrchestratorError::JobHasNoIoHandle)?;
-        set_fd_non_blocking(&stderr);
+        taskmeister::set_fd_non_blocking(&stderr);
 
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or(OrchestratorError::JobHasNoIoHandle)?;
+        self.set_job_stdin(
+            alias,
+            child
+                .stdin
+                .take()
+                .ok_or(OrchestratorError::JobHasNoIoHandle)?,
+        );
 
         // Create an I/O handler
-        self.io_router_requests.create(
-            alias,
-            stdout,
-            stderr,
-            stdin,
-            &service.stdout,
-            &service.stderr,
-        );
+        self.io_router_requests
+            .create(alias, stdout, stderr, &service.stdout, &service.stderr);
 
         // Add handler to the watched jobs
         let mut watched = self.watched.lock().unwrap();
@@ -336,6 +336,26 @@ Stderr:
     pub fn detach_job(&self, alias: &str) -> Result<(), OrchestratorError> {
         self.io_router_requests.stop_forwarding(alias)
     }
+
+    pub fn forward_stdin_job(
+        &mut self,
+        alias: &str,
+        input: Vec<u8>,
+    ) -> Result<(), OrchestratorError> {
+        let Some(job) = self.jobs.get_mut(alias) else {
+            return Ok(());
+        };
+
+        let Some(stdin) = &mut job.stdin else {
+            return Ok(());
+        };
+
+        if let Err(err) = stdin.write_all(&input) {
+            return Err(OrchestratorError::JobIoError(err));
+        }
+
+        Ok(())
+    }
 }
 
 // #################### UTILS ####################
@@ -345,16 +365,5 @@ fn kill(pid: u32, signal: i32) -> io::Result<()> {
         Err(io::Error::last_os_error())
     } else {
         Ok(())
-    }
-}
-
-fn set_fd_non_blocking<T>(fd: &T)
-where
-    T: AsRawFd,
-{
-    unsafe {
-        let fd = fd.as_raw_fd();
-        let flags = libc::fcntl(fd, libc::F_GETFL);
-        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
     }
 }

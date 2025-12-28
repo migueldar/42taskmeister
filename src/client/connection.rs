@@ -1,7 +1,12 @@
 use std::{
     error::Error,
-    io::Write,
+    io::{self, Read, Write},
     net::{SocketAddr, TcpStream},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
 };
 
 use serde::Deserialize;
@@ -21,6 +26,7 @@ fn line_to_request(line: &str) -> Request {
         command: splitted_line.next().unwrap().to_string(),
         flags: vec![],
         args: vec![],
+        stream: None,
     };
 
     for f in splitted_line {
@@ -34,6 +40,10 @@ fn line_to_request(line: &str) -> Request {
 }
 
 fn process_response(res: &Response, exit_code: &mut ExitCode) -> bool {
+    if res.len() == 0 {
+        return true;
+    }
+
     *exit_code = ExitCode::OK;
     let mut last_message: &ResponsePart = &ResponsePart::Info("OK".to_string());
 
@@ -69,11 +79,49 @@ impl Connection {
         let req = line_to_request(line);
         self.sock_write
             .write(serde_json::to_string(&req)?.as_bytes())?;
+        let mut handle = None;
+        let stop_stdio = Arc::new(AtomicBool::new(false));
+
+        if req.command == "at" || req.command == "attach" {
+            let mut sock = self.sock_write.try_clone()?;
+            let stop_stdio_thread = stop_stdio.clone();
+
+            handle = Some(thread::spawn(move || -> io::Result<()> {
+                let mut buff = [0; 1024];
+
+                while !stop_stdio_thread.load(Ordering::Relaxed) {
+                    match io::stdin().read(&mut buff) {
+                        Ok(0) => break,
+                        Ok(bytes) => sock.write(
+                            serde_json::to_string(&Request {
+                                command: "stream".to_string(),
+                                flags: Vec::new(),
+                                args: req.args.clone(), // The alias
+                                stream: Some(buff[..bytes].to_vec()),
+                            })?
+                            .as_bytes(),
+                        )?,
+                        Err(err) => {
+                            eprintln!("Error: {err}");
+                            break;
+                        }
+                    };
+                }
+
+                Ok(())
+            }));
+        }
 
         let mut streaming = true;
         while streaming {
             let res = Response::deserialize(&mut self.deserializer)?;
             streaming = process_response(&res, exit_code);
+        }
+
+        stop_stdio.store(true, Ordering::Relaxed);
+
+        if let Some(handle) = handle {
+            let _ = handle.join();
         }
 
         Ok(())

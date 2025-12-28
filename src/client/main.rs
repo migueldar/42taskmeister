@@ -10,6 +10,7 @@ use rustyline::error::ReadlineError;
 
 use std::error::Error;
 use std::fs::File;
+use std::io;
 use std::process;
 
 const HELPMESSAGE: &str = r#"usage: cargo run --bin client [OPTIONS...] [server_addr]

@@ -89,7 +89,7 @@ impl Stdin {
     fn forward(&mut self) -> Result<(), io::Error> {
         let Some(rx) = &self.rx else { return Ok(()) };
 
-        while let Ok(data) = rx.try_recv() {
+        if let Ok(data) = rx.try_recv() {
             if let Err(err) = self.pipe.write_all(&data) {
                 return Err(err);
             }
@@ -102,7 +102,6 @@ impl Stdin {
 struct Tee {
     stdout: Stdout,
     stderr: Stderr,
-    stdin: Stdin,
 }
 
 impl Tee {
@@ -112,7 +111,6 @@ impl Tee {
     fn new(
         stdout: ChildStdout,
         stderr: ChildStderr,
-        stdin: ChildStdin,
         def_stdout: &str,
         def_stderr: &str,
     ) -> Result<Tee, io::Error> {
@@ -135,17 +133,13 @@ impl Tee {
                 tx: None,
                 buff: VecDeque::with_capacity(IO_ROUTER_READ_BUF_LEN * DEQUE_BUF_LEN),
             },
-            stdin: Stdin {
-                pipe: stdin,
-                rx: None,
-            },
         })
     }
 }
 
 pub enum IoRouterRequest {
-    Create(String, ChildStdout, ChildStderr, ChildStdin, String, String), // Alias, Stdout Pipe, Stderr Pipe, Stdin Pipe, Default Stdout File, Default Stderr File
-    Remove(String),                                                       // Alias
+    Create(String, ChildStdout, ChildStderr, String, String), // Alias, Stdout Pipe, Stderr Pipe, Stdin Pipe, Default Stdout File, Default Stderr File
+    Remove(String),                                           // Alias
     ReadBuff(String, Sender<(Vec<u8>, Vec<u8>)>), // Alias, Stdout Channel, Stderr Channel
     StartForwarding(
         String,
@@ -169,7 +163,6 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
                     stdout_channel,
                     stderr_channel,
                     resp_channel,
-                    // stdin_channel,
                 ) => {
                     let result = resp_channel.send(if let Some(tee) = ios.get_mut(&alias) {
                         if matches!(tee.stdout.tx, Some(_)) {
@@ -221,15 +214,16 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
                                 times -= 1;
                             }
 
+                            // TODO: Drain stdin?
+
                             // Then remove the forward channel
                             tee.stdout.tx = None;
                             tee.stderr.tx = None;
-                            tee.stdin.rx = None;
                         }
                     }
                 }
-                IoRouterRequest::Create(alias, stdout, stderr, stdin, def_stdout, def_stderr) => {
-                    match Tee::new(stdout, stderr, stdin, &def_stdout, &def_stderr) {
+                IoRouterRequest::Create(alias, stdout, stderr, def_stdout, def_stderr) => {
+                    match Tee::new(stdout, stderr, &def_stdout, &def_stderr) {
                         Ok(tee) => {
                             ios.entry(alias).or_insert(tee);
                         }
@@ -251,10 +245,6 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
                 .forward(&mut buff)
                 .inspect_err(|err| logger::error!(logger, "Reading from stderr: {err}"))
                 .ok();
-            tee.stdin
-                .forward()
-                .inspect_err(|err| logger::error!(logger, "Writing to stdin: {err}"))
-                .ok();
         }
         thread::sleep(period);
     }
@@ -275,7 +265,6 @@ pub trait RouterRequest {
         alias: &str,
         stdout: ChildStdout,
         stderr: ChildStderr,
-        stdin: ChildStdin,
         def_stdout: &str,
         def_stderr: &str,
     );
@@ -314,7 +303,6 @@ impl RouterRequest for Sender<IoRouterRequest> {
         alias: &str,
         stdout: ChildStdout,
         stderr: ChildStderr,
-        stdin: ChildStdin,
         def_stdout: &str,
         def_stderr: &str,
     ) {
@@ -322,7 +310,6 @@ impl RouterRequest for Sender<IoRouterRequest> {
             alias.to_string(),
             stdout,
             stderr,
-            stdin,
             def_stdout.to_string(),
             def_stderr.to_string(),
         ));

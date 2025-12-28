@@ -10,6 +10,7 @@ use logger::{LogLevel, Logger};
 use std::{
     collections::HashMap,
     fmt, io,
+    process::ChildStdin,
     sync::{
         Arc, Mutex,
         mpsc::{self, Receiver, Sender},
@@ -109,6 +110,12 @@ impl Orchestrator {
     pub fn set_job_status(&mut self, alias: &str, status: JobStatus) {
         if let Some(job) = self.jobs.get_mut(alias) {
             job.status = status;
+        }
+    }
+
+    pub fn set_job_stdin(&mut self, alias: &str, stdin: ChildStdin) {
+        if let Some(job) = self.jobs.get_mut(alias) {
+            job.stdin = Some(stdin);
         }
     }
 
@@ -263,6 +270,10 @@ impl Orchestrator {
                             }
                         }
                         ServiceAction::Detach(alias) => self.detach_job(&alias).into(),
+                        ServiceAction::Input(alias, input) => {
+                            let _ = self.forward_stdin_job(&alias, input);
+                            continue;
+                        }
                     };
 
                     request

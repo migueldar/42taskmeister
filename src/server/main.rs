@@ -31,7 +31,7 @@ pub const CLI_HELP: &str = r#"Commands:
 	help [?]	Show this help
 "#;
 
-fn command_to_action(req: &Request) -> Option<ServiceAction> {
+fn command_to_action(req: Request) -> Option<ServiceAction> {
     let alias = req.args.first().cloned().unwrap_or_default();
 
     match req.command.as_str() {
@@ -41,6 +41,7 @@ fn command_to_action(req: &Request) -> Option<ServiceAction> {
         "status" | "stat" => Some(ServiceAction::Status(alias)),
         "attach" | "at" => Some(ServiceAction::Attach(alias)),
         "detach" | "dt" => Some(ServiceAction::Detach(alias)),
+        "stream" => req.stream.map(|input| ServiceAction::Input(alias, input)),
         "reload" | "rl" => Some(ServiceAction::Reload),
         "help" | "?" => Some(ServiceAction::Help),
         _ => None,
@@ -48,17 +49,14 @@ fn command_to_action(req: &Request) -> Option<ServiceAction> {
 }
 
 fn process_request(
-    req: &Request,
+    req: Request,
     requests_tx: Sender<OrchestratorMsg>,
     mut socket_tx: TcpStream,
 ) -> Result<(), Box<dyn Error>> {
     let Some(action) = command_to_action(req) else {
         socket_tx.write(
-            serde_json::to_string(&[ResponsePart::Error(format!(
-                "Command [{}] not found",
-                req.command
-            ))])?
-            .as_bytes(),
+            serde_json::to_string(&[ResponsePart::Error(format!("Command not found",))])?
+                .as_bytes(),
         )?;
         return Ok(());
     };
@@ -72,14 +70,19 @@ fn process_request(
 
     match action {
         ServiceAction::Attach(_) => {
-            for data in rx {
-                socket_tx.write(serde_json::to_string(&[data])?.as_bytes())?;
-            }
+            thread::spawn(move || -> io::Result<()> {
+                for data in rx {
+                    socket_tx.write(serde_json::to_string(&[data])?.as_bytes())?;
+                }
+                Ok(())
+            });
         }
         _ => {
-            socket_tx.write(
-                serde_json::to_string(&rx.iter().collect::<Vec<ResponsePart>>())?.as_bytes(),
-            )?;
+            let response: Vec<ResponsePart> = rx.iter().collect();
+
+            if response.len() > 0 {
+                socket_tx.write(serde_json::to_string(&response)?.as_bytes())?;
+            }
         }
     }
 
@@ -124,7 +127,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
                 logger::info!(logger, "{req:?}");
 
-                if let Err(err) = process_request(&req, requests_tx.clone(), sock_read.try_clone()?)
+                if let Err(err) = process_request(req, requests_tx.clone(), sock_read.try_clone()?)
                 {
                     logger::error!(logger, "Processing request: {err}");
                 }

@@ -1,3 +1,5 @@
+use std::os::fd::AsRawFd;
+
 use serde::{Deserialize, Serialize};
 
 pub mod dir_utils;
@@ -7,6 +9,7 @@ pub struct Request {
     pub command: String,
     pub flags: Vec<String>,
     pub args: Vec<String>,
+    pub stream: Option<Vec<u8>>,
 }
 
 pub type Response = Vec<ResponsePart>;
@@ -60,5 +63,16 @@ where
             Ok(ok_part) => ok_part.into_response(),
             Err(err) => ResponsePart::Error(err.to_string()),
         }
+    }
+}
+
+pub fn set_fd_non_blocking<T>(fd: &T)
+where
+    T: AsRawFd,
+{
+    unsafe {
+        let fd = fd.as_raw_fd();
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
     }
 }

@@ -17,6 +17,7 @@ pub enum ServiceAction {
     Status(String),
     Attach(String),
     Detach(String),
+    Input(String, Vec<u8>),
     Reload,
     Help,
 }
