@@ -2,11 +2,13 @@ use std::{
     error::Error,
     io::{self, Read, Write},
     net::{SocketAddr, TcpStream},
+    os::fd::AsRawFd,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
     thread,
+    time::Duration,
 };
 
 use serde::Deserialize;
@@ -86,29 +88,40 @@ impl Connection {
             let mut sock = self.sock_write.try_clone()?;
             let stop_stdio_thread = stop_stdio.clone();
 
-            handle = Some(thread::spawn(move || -> io::Result<()> {
+            handle = Some(thread::spawn(move || {
                 let mut buff = [0; 1024];
+                let mut stdin = io::stdin().lock();
+                taskmeister::set_fd_flag(&stdin.as_raw_fd(), libc::O_NONBLOCK);
 
                 while !stop_stdio_thread.load(Ordering::Relaxed) {
-                    match io::stdin().read(&mut buff) {
+                    match stdin.read(&mut buff) {
                         Ok(0) => break,
-                        Ok(bytes) => sock.write(
-                            serde_json::to_string(&Request {
-                                command: "stream".to_string(),
-                                flags: Vec::new(),
-                                args: req.args.clone(), // The alias
-                                stream: Some(buff[..bytes].to_vec()),
-                            })?
-                            .as_bytes(),
-                        )?,
+                        Ok(bytes) => {
+                            sock.write(
+                                serde_json::to_string(&Request {
+                                    command: String::new(),
+                                    flags: Vec::new(),
+                                    args: req.args.clone(), // The alias
+                                    stream: Some(buff[..bytes].to_vec()),
+                                })
+                                .inspect_err(|err| eprintln!("Error: Stdin forward: {err}"))
+                                .unwrap_or_default()
+                                .as_bytes(),
+                            )
+                            .inspect_err(|err| eprintln!("Error: Stdin forward: {err}"))
+                            .ok();
+                        }
+                        Err(err) if err.kind() == io::ErrorKind::WouldBlock => (),
                         Err(err) => {
-                            eprintln!("Error: {err}");
+                            eprintln!("Error: Stdin forward: {err}");
                             break;
                         }
                     };
+
+                    thread::sleep(Duration::from_millis(100));
                 }
 
-                Ok(())
+                taskmeister::clear_fd_flag(&stdin.as_raw_fd(), libc::O_NONBLOCK);
             }));
         }
 

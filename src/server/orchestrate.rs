@@ -265,14 +265,18 @@ impl Orchestrator {
                             {
                                 Err::<(), OrchestratorError>(err).into()
                             } else {
-                                // Do not send a normal response, just stream
+                                // While streaming do not send any response
                                 continue;
                             }
                         }
                         ServiceAction::Detach(alias) => self.detach_job(&alias).into(),
                         ServiceAction::Input(alias, input) => {
-                            let _ = self.forward_stdin_job(&alias, input);
-                            continue;
+                            if let Err(err) = self.forward_stdin_job(&alias, input) {
+                                Err::<(), OrchestratorError>(err).into()
+                            } else {
+                                // While streaming do not send any response
+                                continue;
+                            }
                         }
                     };
 

@@ -66,13 +66,27 @@ where
     }
 }
 
-pub fn set_fd_non_blocking<T>(fd: &T)
+// Sets fd non blocking returning previous flag set
+pub fn set_fd_flag<T>(fd: &T, new_flag: i32) -> i32
 where
     T: AsRawFd,
 {
     unsafe {
         let fd = fd.as_raw_fd();
         let flags = libc::fcntl(fd, libc::F_GETFL);
-        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        libc::fcntl(fd, libc::F_SETFL, flags | new_flag);
+        flags
+    }
+}
+
+pub fn clear_fd_flag<T>(fd: &T, new_flag: i32) -> i32
+where
+    T: AsRawFd,
+{
+    unsafe {
+        let fd = fd.as_raw_fd();
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        libc::fcntl(fd, libc::F_SETFL, flags & !new_flag);
+        flags
     }
 }

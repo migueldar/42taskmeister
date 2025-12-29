@@ -34,6 +34,10 @@ pub const CLI_HELP: &str = r#"Commands:
 fn command_to_action(req: Request) -> Option<ServiceAction> {
     let alias = req.args.first().cloned().unwrap_or_default();
 
+    if let Some(input) = req.stream {
+        return Some(ServiceAction::Input(alias, input));
+    }
+
     match req.command.as_str() {
         "start" | "st" => Some(ServiceAction::Start(alias)),
         "stop" | "sp" => Some(ServiceAction::Stop(alias)),
@@ -41,7 +45,6 @@ fn command_to_action(req: Request) -> Option<ServiceAction> {
         "status" | "stat" => Some(ServiceAction::Status(alias)),
         "attach" | "at" => Some(ServiceAction::Attach(alias)),
         "detach" | "dt" => Some(ServiceAction::Detach(alias)),
-        "stream" => req.stream.map(|input| ServiceAction::Input(alias, input)),
         "reload" | "rl" => Some(ServiceAction::Reload),
         "help" | "?" => Some(ServiceAction::Help),
         _ => None,

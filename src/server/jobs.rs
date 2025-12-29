@@ -93,13 +93,13 @@ impl Orchestrator {
             .stdout
             .take()
             .ok_or(OrchestratorError::JobHasNoIoHandle)?;
-        taskmeister::set_fd_non_blocking(&stdout);
+        taskmeister::set_fd_flag(&stdout, libc::O_NONBLOCK);
 
         let stderr = child
             .stderr
             .take()
             .ok_or(OrchestratorError::JobHasNoIoHandle)?;
-        taskmeister::set_fd_non_blocking(&stderr);
+        taskmeister::set_fd_flag(&stderr, libc::O_NONBLOCK);
 
         self.set_job_stdin(
             alias,
