@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fs::{File, OpenOptions},
     io::{self, Read, Write},
-    process::{ChildStderr, ChildStdin, ChildStdout},
+    process::{ChildStderr, ChildStdout},
     sync::mpsc::{self, Receiver, Sender, SyncSender},
     thread,
     time::Duration,
@@ -80,25 +80,6 @@ impl Stderr {
     }
 }
 
-struct Stdin {
-    pipe: ChildStdin,
-    rx: Option<Receiver<Vec<u8>>>,
-}
-
-impl Stdin {
-    fn forward(&mut self) -> Result<(), io::Error> {
-        let Some(rx) = &self.rx else { return Ok(()) };
-
-        if let Ok(data) = rx.try_recv() {
-            if let Err(err) = self.pipe.write_all(&data) {
-                return Err(err);
-            }
-        }
-
-        Ok(())
-    }
-}
-
 struct Tee {
     stdout: Stdout,
     stderr: Stderr,
@@ -138,15 +119,15 @@ impl Tee {
 }
 
 pub enum IoRouterRequest {
-    Create(String, ChildStdout, ChildStderr, String, String), // Alias, Stdout Pipe, Stderr Pipe, Stdin Pipe, Default Stdout File, Default Stderr File
+    Create(String, ChildStdout, ChildStderr, String, String), // Alias, Stdout Pipe, Stderr Pipe, Default Stdout File, Default Stderr File
     Remove(String),                                           // Alias
     ReadBuff(String, Sender<(Vec<u8>, Vec<u8>)>), // Alias, Stdout Channel, Stderr Channel
     StartForwarding(
         String,
         SyncSender<Vec<u8>>,
         SyncSender<Vec<u8>>,
-        Sender<Result<(), OrchestratorError>>, // Receiver<Vec<u8>>,
-    ), // Alias, Stdout Channel, Stderr Channel, Stdin Channel
+        Sender<Result<(), OrchestratorError>>,
+    ), // Alias, Stdout Channel, Stderr Channel, Result Channel
     StopForwarding(String),                       // Alias
 }
 
@@ -172,7 +153,6 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
                             tee.stderr.tx = Some(stderr_channel);
                             Ok(())
                         }
-                        // tee.stdin.rx = Some(stdin_channel);
                     } else {
                         Err(OrchestratorError::JobNotFound)
                     });
@@ -213,8 +193,6 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
                             while tee.stderr.forward(&mut buff).unwrap_or(false) && times != 0 {
                                 times -= 1;
                             }
-
-                            // TODO: Drain stdin?
 
                             // Then remove the forward channel
                             tee.stdout.tx = None;

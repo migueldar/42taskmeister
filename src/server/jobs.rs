@@ -6,7 +6,6 @@ use libc;
 use logger::{self, LogLevel};
 use std::{
     io::{self, Write},
-    os::fd::AsRawFd,
     process::ChildStdin,
     sync::mpsc::{self, Sender},
     thread,
