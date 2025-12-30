@@ -40,7 +40,7 @@ impl Orchestrator {
                         // Watched to starting, wait the timeout to set the job as healthy
                         self.set_watched_status(&event.alias, JobStatus::Running(false))
                             .inspect_err(|err| {
-                                logger::error!(self.logger, "Error setting watched status: {err}")
+                                logger::error!(self.logger, "Setting watched status: {err}")
                             })
                             .ok();
                         (JobStatus::Running(false), false)
@@ -56,6 +56,12 @@ impl Orchestrator {
             }
 
             JobStatus::Finished(exit_code) => 'finished: {
+                // End the forwarding cleanly if any
+                self.io_router_requests
+                    .stop_forwarding(&event.alias)
+                    .inspect_err(|err| logger::error!(self.logger, "Stop forwarding: {err}"))
+                    .ok();
+
                 // Remove the I/O handler
                 self.io_router_requests.remove(&event.alias);
 

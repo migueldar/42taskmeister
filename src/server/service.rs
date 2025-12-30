@@ -9,12 +9,15 @@ use std::{
 use taskmeister::dir_utils;
 
 /// Actions on services and the alias of that service
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ServiceAction {
     Start(String),
     Restart(String),
     Stop(String),
     Status(String),
+    Attach(String),
+    Detach(String),
+    Input(String, Vec<u8>),
     Reload,
     Help,
 }

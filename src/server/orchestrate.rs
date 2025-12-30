@@ -10,6 +10,7 @@ use logger::{LogLevel, Logger};
 use std::{
     collections::HashMap,
     fmt, io,
+    process::ChildStdin,
     sync::{
         Arc, Mutex,
         mpsc::{self, Receiver, Sender},
@@ -17,6 +18,7 @@ use std::{
     thread,
     time::Duration,
 };
+use taskmeister::ResponsePart;
 
 #[derive(Debug)]
 pub enum OrchestratorError {
@@ -27,6 +29,9 @@ pub enum OrchestratorError {
     ServiceAlreadyStopping,
     JobNotFound,
     JobHasNoIoHandle,
+    JobAlreadyAttached,
+    InternalChannelSendError,
+    InternalChannelReceiveError,
     JobIoError(io::Error),
 }
 
@@ -43,6 +48,11 @@ impl fmt::Display for OrchestratorError {
             OrchestratorError::JobHasNoIoHandle => {
                 write!(f, "Job has no handle for either stdin/stdout/stderr")
             }
+            OrchestratorError::JobAlreadyAttached => {
+                write!(f, "Job already attached to another client")
+            }
+            OrchestratorError::InternalChannelSendError => write!(f, "Internal channel send"),
+            OrchestratorError::InternalChannelReceiveError => write!(f, "Internal channel receive"),
         }
     }
 }
@@ -50,7 +60,7 @@ impl fmt::Display for OrchestratorError {
 #[derive(Debug)]
 pub struct OrchestratorRequest {
     pub action: ServiceAction,
-    pub response_channel: Sender<Result<String, OrchestratorError>>,
+    pub response_channel: Sender<ResponsePart>,
 }
 
 pub enum OrchestratorMsg {
@@ -95,6 +105,24 @@ impl Orchestrator {
     // #################### GET/SET UTILS ####################
     pub fn get_job_status(&self, alias: &str) -> Option<JobStatus> {
         self.jobs.get(alias).map(|job| job.status.clone())
+    }
+
+    pub fn set_job_status(&mut self, alias: &str, status: JobStatus) {
+        if let Some(job) = self.jobs.get_mut(alias) {
+            job.status = status;
+        }
+    }
+
+    pub fn set_job_stdin(&mut self, alias: &str, stdin: ChildStdin) {
+        if let Some(job) = self.jobs.get_mut(alias) {
+            job.stdin = Some(stdin);
+        }
+    }
+
+    pub fn set_job_timestamp(&mut self, alias: &str) {
+        if let Some(job) = self.jobs.get_mut(alias) {
+            job.started = Some(logger::timestamp());
+        }
     }
 
     pub fn consume_job_flags(&mut self, alias: &str) -> JobFlags {
@@ -186,16 +214,14 @@ impl Orchestrator {
         while let Some(message) = self.messages_rx.iter().next() {
             match message {
                 OrchestratorMsg::Request(request) => {
-                    let result = match request.action {
-                        ServiceAction::Start(alias) => {
-                            self.start_request(&alias).map(|_| "OK".to_string())
+                    let result: ResponsePart = match request.action {
+                        ServiceAction::Start(alias) => self.start_request(&alias).into(),
+                        ServiceAction::Restart(alias) => {
+                            self.stop_request(&alias, false, true).into()
                         }
-                        ServiceAction::Restart(alias) => self
-                            .stop_request(&alias, false, true)
-                            .map(|_| "OK".to_string()),
-                        ServiceAction::Stop(alias) => self
-                            .stop_request(&alias, false, false)
-                            .map(|_| "OK".to_string()),
+                        ServiceAction::Stop(alias) => {
+                            self.stop_request(&alias, false, false).into()
+                        }
                         ServiceAction::Reload => match self.services.update() {
                             Ok(up_services) => {
                                 let mut res = Ok(());
@@ -228,9 +254,30 @@ impl Orchestrator {
                                 Err(OrchestratorError::ServiceUpdate)
                             }
                         }
-                        .map(|_| "OK".to_string()),
-                        ServiceAction::Status(alias) => self.job_status(&alias),
-                        ServiceAction::Help => Ok(CLI_HELP.to_string()),
+                        .into(),
+                        ServiceAction::Status(alias) => self.job_status(&alias).into(),
+                        ServiceAction::Help => {
+                            Ok::<String, OrchestratorError>(CLI_HELP.to_string()).into()
+                        }
+                        ServiceAction::Attach(alias) => {
+                            if let Err(err) =
+                                self.attach_job(&alias, request.response_channel.clone())
+                            {
+                                Err::<(), OrchestratorError>(err).into()
+                            } else {
+                                // While streaming do not send any response
+                                continue;
+                            }
+                        }
+                        ServiceAction::Detach(alias) => self.detach_job(&alias).into(),
+                        ServiceAction::Input(alias, input) => {
+                            if let Err(err) = self.forward_stdin_job(&alias, input) {
+                                Err::<(), OrchestratorError>(err).into()
+                            } else {
+                                // While streaming do not send any response
+                                continue;
+                            }
+                        }
                     };
 
                     request

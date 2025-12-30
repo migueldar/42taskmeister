@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fs::{File, OpenOptions},
     io::{self, Read, Write},
-    process::{ChildStderr, ChildStdin, ChildStdout},
+    process::{ChildStderr, ChildStdout},
     sync::mpsc::{self, Receiver, Sender, SyncSender},
     thread,
     time::Duration,
@@ -10,8 +10,11 @@ use std::{
 
 use logger::{LogLevel, Logger};
 
-const READ_BUF_LEN: usize = 1024;
+use crate::orchestrate::OrchestratorError;
+
+pub const IO_ROUTER_READ_BUF_LEN: usize = 1024;
 const DEQUE_BUF_LEN: usize = 10;
+const DRAIN_TIMES: usize = 100;
 
 struct Stdout {
     pipe: ChildStdout,
@@ -21,9 +24,10 @@ struct Stdout {
 }
 
 impl Stdout {
-    fn forward(&mut self, buf: &mut [u8]) -> Result<(), io::Error> {
+    // Return Ok(false) if we do not want to continue reading
+    fn forward(&mut self, buf: &mut [u8]) -> Result<bool, io::Error> {
         match self.pipe.read(buf) {
-            Ok(0) => Ok(()),
+            Ok(0) => Ok(false),
             Ok(bytes) => {
                 // Always push into the ring buffer
                 ring_buf_push(&mut self.buff, buf[..bytes].to_vec());
@@ -36,9 +40,9 @@ impl Stdout {
                     let _ = stdout.write(&buf[..bytes]);
                 }
 
-                Ok(())
+                Ok(true)
             }
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(false),
             Err(err) => Err(err),
         }
     }
@@ -52,9 +56,10 @@ struct Stderr {
 }
 
 impl Stderr {
-    fn forward(&mut self, buf: &mut [u8]) -> Result<(), io::Error> {
+    // Return Ok(false) if we do not want to continue reading
+    fn forward(&mut self, buf: &mut [u8]) -> Result<bool, io::Error> {
         match self.pipe.read(buf) {
-            Ok(0) => Ok(()),
+            Ok(0) => Ok(false),
             Ok(bytes) => {
                 // Always push into the ring buffer
                 ring_buf_push(&mut self.buff, buf[..bytes].to_vec());
@@ -67,47 +72,26 @@ impl Stderr {
                     let _ = stderr.write(&buf[..bytes]);
                 }
 
-                Ok(())
+                Ok(true)
             }
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(false),
             Err(err) => Err(err),
         }
     }
 }
 
-struct Stdin {
-    pipe: ChildStdin,
-    rx: Option<Receiver<Vec<u8>>>,
-}
-
-impl Stdin {
-    fn forward(&mut self) -> Result<(), io::Error> {
-        let Some(rx) = &self.rx else { return Ok(()) };
-
-        while let Ok(data) = rx.try_recv() {
-            if let Err(err) = self.pipe.write_all(&data) {
-                return Err(err);
-            }
-        }
-
-        Ok(())
-    }
-}
-
-pub struct Tee {
+struct Tee {
     stdout: Stdout,
     stderr: Stderr,
-    stdin: Stdin,
 }
 
 impl Tee {
     // Create a new tee with default values. This way the subsequent functions only
     // need to call to a give buffer and the default value. TODO: Check if the
     // default value is the only way we need to use this tee moudle.
-    pub fn new(
+    fn new(
         stdout: ChildStdout,
         stderr: ChildStderr,
-        stdin: ChildStdin,
         def_stdout: &str,
         def_stderr: &str,
     ) -> Result<Tee, io::Error> {
@@ -119,7 +103,7 @@ impl Tee {
                     o => Some(OpenOptions::new().create(true).write(true).open(o)?),
                 },
                 tx: None,
-                buff: VecDeque::with_capacity(READ_BUF_LEN * DEQUE_BUF_LEN),
+                buff: VecDeque::with_capacity(IO_ROUTER_READ_BUF_LEN * DEQUE_BUF_LEN),
             },
             stderr: Stderr {
                 pipe: stderr,
@@ -128,32 +112,29 @@ impl Tee {
                     o => Some(OpenOptions::new().create(true).write(true).open(o)?),
                 },
                 tx: None,
-                buff: VecDeque::with_capacity(READ_BUF_LEN * DEQUE_BUF_LEN),
-            },
-            stdin: Stdin {
-                pipe: stdin,
-                rx: None,
+                buff: VecDeque::with_capacity(IO_ROUTER_READ_BUF_LEN * DEQUE_BUF_LEN),
             },
         })
     }
 }
 
 pub enum IoRouterRequest {
-    Create(String, ChildStdout, ChildStderr, ChildStdin, String, String), // Alias, Stdout Pipe, Stderr Pipe, Stdin Pipe, Default Stdout File, Default Stderr File
-    Remove(String),                                                       // Alias
+    Create(String, ChildStdout, ChildStderr, String, String), // Alias, Stdout Pipe, Stderr Pipe, Default Stdout File, Default Stderr File
+    Remove(String),                                           // Alias
     ReadBuff(String, Sender<(Vec<u8>, Vec<u8>)>), // Alias, Stdout Channel, Stderr Channel
     StartForwarding(
         String,
         SyncSender<Vec<u8>>,
         SyncSender<Vec<u8>>,
-        Receiver<Vec<u8>>,
-    ), // Alias, Stdout Channel, Stderr Channel, Stdin Channel
+        Sender<Result<(), OrchestratorError>>,
+    ), // Alias, Stdout Channel, Stderr Channel, Result Channel
     StopForwarding(String),                       // Alias
 }
 
 pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
     let mut ios: HashMap<String, Tee> = HashMap::new();
     let period = Duration::from_millis(100);
+    let mut buff = [0; IO_ROUTER_READ_BUF_LEN];
 
     loop {
         while let Ok(req) = requests.try_recv() {
@@ -162,12 +143,22 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
                     alias,
                     stdout_channel,
                     stderr_channel,
-                    stdin_channel,
+                    resp_channel,
                 ) => {
-                    if let Some(tee) = ios.get_mut(&alias) {
-                        tee.stdout.tx = Some(stdout_channel);
-                        tee.stderr.tx = Some(stderr_channel);
-                        tee.stdin.rx = Some(stdin_channel);
+                    let result = resp_channel.send(if let Some(tee) = ios.get_mut(&alias) {
+                        if matches!(tee.stdout.tx, Some(_)) {
+                            Err(OrchestratorError::JobAlreadyAttached)
+                        } else {
+                            tee.stdout.tx = Some(stdout_channel);
+                            tee.stderr.tx = Some(stderr_channel);
+                            Ok(())
+                        }
+                    } else {
+                        Err(OrchestratorError::JobNotFound)
+                    });
+
+                    if let Err(err) = result {
+                        logger::error!(logger, "Sending to channel {err}");
                     }
                 }
                 IoRouterRequest::ReadBuff(alias, resp_tx) =>
@@ -191,13 +182,26 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
                 }
                 IoRouterRequest::StopForwarding(alias) => {
                     if let Some(tee) = ios.get_mut(&alias) {
-                        tee.stdout.tx = None;
-                        tee.stderr.tx = None;
-                        tee.stdin.rx = None;
+                        if matches!(tee.stdout.tx, Some(_)) {
+                            // First drain all the pipes up to times
+                            let mut times = DRAIN_TIMES;
+                            while tee.stdout.forward(&mut buff).unwrap_or(false) && times != 0 {
+                                times -= 1;
+                            }
+
+                            let mut times = DRAIN_TIMES;
+                            while tee.stderr.forward(&mut buff).unwrap_or(false) && times != 0 {
+                                times -= 1;
+                            }
+
+                            // Then remove the forward channel
+                            tee.stdout.tx = None;
+                            tee.stderr.tx = None;
+                        }
                     }
                 }
-                IoRouterRequest::Create(alias, stdout, stderr, stdin, def_stdout, def_stderr) => {
-                    match Tee::new(stdout, stderr, stdin, &def_stdout, &def_stderr) {
+                IoRouterRequest::Create(alias, stdout, stderr, def_stdout, def_stderr) => {
+                    match Tee::new(stdout, stderr, &def_stdout, &def_stderr) {
                         Ok(tee) => {
                             ios.entry(alias).or_insert(tee);
                         }
@@ -211,19 +215,13 @@ pub fn route(requests: Receiver<IoRouterRequest>, logger: Logger) {
         }
 
         for (_, tee) in &mut ios {
-            let mut buf = [0; READ_BUF_LEN];
-
             tee.stdout
-                .forward(&mut buf)
+                .forward(&mut buff)
                 .inspect_err(|err| logger::error!(logger, "Reading from stdout: {err}"))
                 .ok();
             tee.stderr
-                .forward(&mut buf)
+                .forward(&mut buff)
                 .inspect_err(|err| logger::error!(logger, "Reading from stderr: {err}"))
-                .ok();
-            tee.stdin
-                .forward()
-                .inspect_err(|err| logger::error!(logger, "Writing to stdin: {err}"))
                 .ok();
         }
         thread::sleep(period);
@@ -245,11 +243,17 @@ pub trait RouterRequest {
         alias: &str,
         stdout: ChildStdout,
         stderr: ChildStderr,
-        stdin: ChildStdin,
         def_stdout: &str,
         def_stderr: &str,
     );
     fn remove(&self, alias: &str);
+    fn start_forwarding(
+        &self,
+        alias: &str,
+        stdout: SyncSender<Vec<u8>>,
+        stderr: SyncSender<Vec<u8>>,
+    ) -> Result<(), OrchestratorError>;
+    fn stop_forwarding(&self, alias: &str) -> Result<(), OrchestratorError>;
 }
 
 impl RouterRequest for Sender<IoRouterRequest> {
@@ -277,7 +281,6 @@ impl RouterRequest for Sender<IoRouterRequest> {
         alias: &str,
         stdout: ChildStdout,
         stderr: ChildStderr,
-        stdin: ChildStdin,
         def_stdout: &str,
         def_stderr: &str,
     ) {
@@ -285,7 +288,6 @@ impl RouterRequest for Sender<IoRouterRequest> {
             alias.to_string(),
             stdout,
             stderr,
-            stdin,
             def_stdout.to_string(),
             def_stderr.to_string(),
         ));
@@ -293,5 +295,31 @@ impl RouterRequest for Sender<IoRouterRequest> {
 
     fn remove(&self, alias: &str) {
         let _ = self.send(IoRouterRequest::Remove(alias.to_string()));
+    }
+
+    fn start_forwarding(
+        &self,
+        alias: &str,
+        stdout: SyncSender<Vec<u8>>,
+        stderr: SyncSender<Vec<u8>>,
+    ) -> Result<(), OrchestratorError> {
+        let (resp_tx, resp_rx) = mpsc::channel();
+
+        self.send(IoRouterRequest::StartForwarding(
+            alias.to_string(),
+            stdout,
+            stderr,
+            resp_tx,
+        ))
+        .map_err(|_| OrchestratorError::InternalChannelSendError)?;
+
+        resp_rx
+            .recv()
+            .unwrap_or(Err(OrchestratorError::InternalChannelReceiveError))
+    }
+
+    fn stop_forwarding(&self, alias: &str) -> Result<(), OrchestratorError> {
+        self.send(IoRouterRequest::StopForwarding(alias.to_string()))
+            .map_err(|_| OrchestratorError::InternalChannelSendError)
     }
 }

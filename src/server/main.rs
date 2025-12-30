@@ -13,67 +13,83 @@ use serde_json::Deserializer;
 use service::{ServiceAction, Services};
 use std::{
     error::Error,
-    io::Write,
+    io::{self, Write},
     net::{TcpListener, TcpStream},
     sync::mpsc::{self, Sender},
     thread::{self},
 };
-use taskmeister::{Request, Response, ResponsePart, dir_utils};
+use taskmeister::{Request, ResponsePart, dir_utils};
 
 pub const CLI_HELP: &str = r#"Commands:
 	start [st]	Start a service
 	stop [sp]	Stop a job
 	restart [rs]	Restart a job
 	status [stat]	Show the current status of a job
+	attach [at]	Attach the job to the current client
+	detach [dt] 	Detach the job from every client
 	reload [rl]	Reload the configuration for the services
 	help [?]	Show this help
 "#;
 
-fn command_to_action(req: &Request) -> Option<ServiceAction> {
+fn command_to_action(req: Request) -> Option<ServiceAction> {
     let alias = req.args.first().cloned().unwrap_or_default();
+
+    if let Some(input) = req.stream {
+        return Some(ServiceAction::Input(alias, input));
+    }
 
     match req.command.as_str() {
         "start" | "st" => Some(ServiceAction::Start(alias)),
         "stop" | "sp" => Some(ServiceAction::Stop(alias)),
         "restart" | "rs" => Some(ServiceAction::Restart(alias)),
         "status" | "stat" => Some(ServiceAction::Status(alias)),
+        "attach" | "at" => Some(ServiceAction::Attach(alias)),
+        "detach" | "dt" => Some(ServiceAction::Detach(alias)),
         "reload" | "rl" => Some(ServiceAction::Reload),
         "help" | "?" => Some(ServiceAction::Help),
         _ => None,
     }
 }
 
-// this is here for client testing purposes
 fn process_request(
-    req: &Request,
+    req: Request,
     requests_tx: Sender<OrchestratorMsg>,
-    logger: Logger,
-) -> Response {
-    let (tx, rx) = mpsc::channel();
+    mut socket_tx: TcpStream,
+) -> Result<(), Box<dyn Error>> {
     let Some(action) = command_to_action(req) else {
-        return vec![ResponsePart::Error(format!(
-            "Command [{}] not found",
-            req.command
-        ))];
+        socket_tx.write(
+            serde_json::to_string(&[ResponsePart::Error(format!("Command not found",))])?
+                .as_bytes(),
+        )?;
+        return Ok(());
     };
 
-    requests_tx
-        .send(OrchestratorMsg::Request(OrchestratorRequest {
-            action,
-            response_channel: tx,
-        }))
-        .inspect_err(|err| logger::error!(logger, "Sending request to orchestrator {err}"))
-        .ok();
+    let (tx, rx) = mpsc::channel();
 
-    let mut response = vec![];
-    for resp in rx {
-        response.push(match resp {
-            Ok(resp_msg) => ResponsePart::Info(resp_msg),
-            Err(err) => ResponsePart::Error(err.to_string()),
-        })
+    requests_tx.send(OrchestratorMsg::Request(OrchestratorRequest {
+        action: action.clone(),
+        response_channel: tx,
+    }))?;
+
+    match action {
+        ServiceAction::Attach(_) => {
+            thread::spawn(move || -> io::Result<()> {
+                for data in rx {
+                    socket_tx.write(serde_json::to_string(&[data])?.as_bytes())?;
+                }
+                Ok(())
+            });
+        }
+        _ => {
+            let response: Vec<ResponsePart> = rx.iter().collect();
+
+            if response.len() > 0 {
+                socket_tx.write(serde_json::to_string(&response)?.as_bytes())?;
+            }
+        }
     }
 
-    response
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -91,33 +107,43 @@ fn main() -> Result<(), Box<dyn Error>> {
         logger.clone(),
     );
 
+    // TODO: manage clean exit by taking the handle
     thread::spawn(move || {
         orchestrator.orchestrate();
     });
 
     let listen_sock: TcpListener = TcpListener::bind(config.server_addr)?;
+    let mut handlers = Vec::new();
     loop {
         let sock_read: TcpStream = listen_sock.accept()?.0;
         let requests_tx = requests_tx.clone();
         let logger = logger.clone();
 
-        let handle = thread::spawn(move || -> std::io::Result<()> {
+        let handle = thread::spawn(move || -> io::Result<()> {
             let deserializer = Deserializer::from_reader(&sock_read).into_iter::<Request>();
-            let mut sock_write: TcpStream = sock_read.try_clone()?;
 
             for req in deserializer {
                 let Ok(req) = req else {
                     logger::warn!(logger, "Deserializing {req:?}");
                     continue;
                 };
+
                 logger::info!(logger, "{req:?}");
-                let res = process_request(&req, requests_tx.clone(), logger.clone());
-                sock_write.write(serde_json::to_string(&res)?.as_bytes())?;
+
+                if let Err(err) = process_request(req, requests_tx.clone(), sock_read.try_clone()?)
+                {
+                    logger::error!(logger, "Processing request: {err}");
+                }
             }
 
             Ok(())
         });
 
-        let _ = handle.join().unwrap();
+        handlers.push(handle);
     }
+
+    // TODO: Manage signals?
+    // for handle in handlers {
+    //     handle.join().unwrap();
+    // }
 }

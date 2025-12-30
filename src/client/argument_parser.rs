@@ -1,4 +1,4 @@
-use std::{env, error::Error, net::SocketAddr, path::PathBuf};
+use std::{env, net::SocketAddr, path::PathBuf};
 
 #[derive(Debug)]
 pub struct ParsedArgumets {

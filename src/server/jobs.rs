@@ -4,10 +4,17 @@
 
 use libc;
 use logger::{self, LogLevel};
-use std::{io, os::fd::AsRawFd, time::Duration};
+use std::{
+    io::{self, Write},
+    process::ChildStdin,
+    sync::mpsc::{self, Sender},
+    thread,
+    time::Duration,
+};
+use taskmeister::{self, ResponsePart};
 
 use crate::{
-    io_router::RouterRequest,
+    io_router::{self, RouterRequest},
     orchestrate::{Orchestrator, OrchestratorError},
     watcher::{Watched, WatchedTimeout},
 };
@@ -40,6 +47,7 @@ pub struct Job {
     pub retries: u8,
     pub last_exit_code: i32, // TODO: Check the need of this
     pub flags: JobFlags,
+    pub stdin: Option<ChildStdin>,
 }
 
 #[derive(PartialEq, Clone, Debug)]
@@ -63,13 +71,14 @@ impl Orchestrator {
             last_exit_code: 0,
             flags: JobFlags::default(),
             started: None,
+            stdin: None,
         }))
     }
 
     fn start_job(&mut self, alias: &str) -> Result<Option<Vec<Watched>>, OrchestratorError> {
         let service = self
             .get_services()
-            .get(&alias)
+            .get(alias)
             .cloned()
             .ok_or(OrchestratorError::ServiceNotFound)?;
 
@@ -84,28 +93,25 @@ impl Orchestrator {
             .stdout
             .take()
             .ok_or(OrchestratorError::JobHasNoIoHandle)?;
-        set_fd_non_blocking(&stdout);
+        taskmeister::set_fd_flag(&stdout, libc::O_NONBLOCK);
 
         let stderr = child
             .stderr
             .take()
             .ok_or(OrchestratorError::JobHasNoIoHandle)?;
-        set_fd_non_blocking(&stderr);
+        taskmeister::set_fd_flag(&stderr, libc::O_NONBLOCK);
 
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or(OrchestratorError::JobHasNoIoHandle)?;
+        self.set_job_stdin(
+            alias,
+            child
+                .stdin
+                .take()
+                .ok_or(OrchestratorError::JobHasNoIoHandle)?,
+        );
 
         // Create an I/O handler
-        self.io_router_requests.create(
-            alias,
-            stdout,
-            stderr,
-            stdin,
-            &service.stdout,
-            &service.stderr,
-        );
+        self.io_router_requests
+            .create(alias, stdout, stderr, &service.stdout, &service.stderr);
 
         // Add handler to the watched jobs
         let mut watched = self.watched.lock().unwrap();
@@ -188,12 +194,11 @@ impl Orchestrator {
 
         // If response is positive, start the job
         if let Ok(_) = response {
-            // Update job
-            job.status = JobStatus::Starting;
-            job.started = Some(logger::timestamp());
-
             response = match self.start_job(alias) {
                 Ok(res) => {
+                    self.set_job_status(alias, JobStatus::Starting);
+                    self.set_job_timestamp(alias);
+
                     if let Some(old_watched_jobs) = res {
                         // TODO: Do something with old jobs in this case?
                         logger::warn!(
@@ -288,6 +293,68 @@ Stderr:
             stderr,
         ))
     }
+
+    pub fn attach_job(
+        &self,
+        alias: &str,
+        tx: Sender<ResponsePart>,
+    ) -> Result<(), OrchestratorError> {
+        let (router_tx, router_rx) = mpsc::sync_channel(io_router::IO_ROUTER_READ_BUF_LEN);
+        let logger = self.logger.clone();
+        let io_router_requests = self.io_router_requests.clone();
+        let alias = alias.to_string();
+
+        io_router_requests.start_forwarding(&alias, router_tx.clone(), router_tx)?;
+
+        thread::spawn(move || {
+            let result =
+                router_rx
+                    .iter()
+                    .find_map(|data| match tx.send(ResponsePart::Stream(data)) {
+                        Ok(_) => None,
+                        Err(err) => Some(err),
+                    });
+
+            // Check the result
+            if let Some(err) = result {
+                logger::error!(logger, "Streaming: {err}");
+                let _ = tx.send(ResponsePart::Error(err.to_string()));
+            } else {
+                let _ = tx.send(ResponsePart::Info("OK [End Of Stream]".to_string()));
+            }
+
+            io_router_requests
+                .stop_forwarding(&alias)
+                .inspect_err(|err| logger::error!(logger, "Stop forwarding: {err}"))
+                .ok();
+        });
+
+        Ok(())
+    }
+
+    pub fn detach_job(&self, alias: &str) -> Result<(), OrchestratorError> {
+        self.io_router_requests.stop_forwarding(alias)
+    }
+
+    pub fn forward_stdin_job(
+        &mut self,
+        alias: &str,
+        input: Vec<u8>,
+    ) -> Result<(), OrchestratorError> {
+        let Some(job) = self.jobs.get_mut(alias) else {
+            return Ok(());
+        };
+
+        let Some(stdin) = &mut job.stdin else {
+            return Ok(());
+        };
+
+        if let Err(err) = stdin.write_all(&input) {
+            return Err(OrchestratorError::JobIoError(err));
+        }
+
+        Ok(())
+    }
 }
 
 // #################### UTILS ####################
@@ -297,16 +364,5 @@ fn kill(pid: u32, signal: i32) -> io::Result<()> {
         Err(io::Error::last_os_error())
     } else {
         Ok(())
-    }
-}
-
-fn set_fd_non_blocking<T>(fd: &T)
-where
-    T: AsRawFd,
-{
-    unsafe {
-        let fd = fd.as_raw_fd();
-        let flags = libc::fcntl(fd, libc::F_GETFL);
-        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
     }
 }
