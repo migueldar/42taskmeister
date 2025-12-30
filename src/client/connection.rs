@@ -41,7 +41,10 @@ fn line_to_request(line: &str) -> Request {
     ret
 }
 
+/// Return true when the response is a streaming message and false for any
+/// other message
 fn process_response(res: &Response, exit_code: &mut ExitCode) -> bool {
+    // Server should not, but empty messages can lead to bugs when streaming
     if res.len() == 0 {
         return true;
     }
