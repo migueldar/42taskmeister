@@ -37,7 +37,7 @@ pub struct Service {
     pub file: PathBuf,
     alias: String,
     cmd: String,
-    clone: u16,
+    numprocs: u16,
     pub restart: RestartOptions,
     pub start_time: u64,
     pub stop_signal: i32,
