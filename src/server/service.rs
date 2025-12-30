@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{
     collections::{HashMap, hash_map::Entry},
     fs::{self},
@@ -40,6 +40,7 @@ pub struct Service {
     numprocs: u16,
     pub restart: RestartOptions,
     pub start_time: u64,
+    #[serde(deserialize_with = "deserialize_signal")]
     pub stop_signal: i32,
     pub stop_wait: u64,
     exit_codes: Vec<i32>,
@@ -170,4 +171,46 @@ impl Service {
         }
         return false;
     }
+}
+
+// UTILS
+
+fn signal_from_str(signal_string: &str) -> Option<i32> {
+    let name = signal_string.trim().to_ascii_uppercase();
+    let name = name.strip_prefix("SIG").unwrap_or(&name);
+
+    match name {
+        "HUP" => Some(libc::SIGHUP),
+        "INT" => Some(libc::SIGINT),
+        "QUIT" => Some(libc::SIGQUIT),
+        "ILL" => Some(libc::SIGILL),
+        "TRAP" => Some(libc::SIGTRAP),
+        "ABRT" => Some(libc::SIGABRT),
+        "BUS" => Some(libc::SIGBUS),
+        "FPE" => Some(libc::SIGFPE),
+        "KILL" => Some(libc::SIGKILL),
+        "USR1" => Some(libc::SIGUSR1),
+        "SEGV" => Some(libc::SIGSEGV),
+        "USR2" => Some(libc::SIGUSR2),
+        "PIPE" => Some(libc::SIGPIPE),
+        "ALRM" => Some(libc::SIGALRM),
+        "TERM" => Some(libc::SIGTERM),
+        "CHLD" => Some(libc::SIGCHLD),
+        "CONT" => Some(libc::SIGCONT),
+        "STOP" => Some(libc::SIGSTOP),
+        "TSTP" => Some(libc::SIGTSTP),
+        "TTIN" => Some(libc::SIGTTIN),
+        "TTOU" => Some(libc::SIGTTOU),
+        _ => None,
+    }
+}
+
+fn deserialize_signal<'de, D>(deserializer: D) -> Result<i32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let string = String::deserialize(deserializer)?;
+
+    signal_from_str(&string)
+        .ok_or_else(|| de::Error::custom(format!("Invalid Signal name: {string}")))
 }
