@@ -47,7 +47,7 @@ pub struct Service {
     pub stdout: String,
     pub stdin: String,
     pub stderr: String,
-    variables: Vec<(String, String)>,
+    env: HashMap<String, String>,
     working_dir: PathBuf,
     umask: u16,
 }
@@ -120,14 +120,15 @@ fn load_services(paths: &Vec<PathBuf>) -> Result<HashMap<String, Service>, io::E
     for p in paths {
         let p = dir_utils::expand_home_dir(p);
         dir_utils::walk_dir(p, &mut |closure_p| {
-            let Ok(mut s) = toml::from_str::<Service>(&fs::read_to_string(&closure_p)?) else {
+            let Ok(mut service) = toml::from_str::<Service>(&fs::read_to_string(&closure_p)?)
+            else {
                 return Err(io::Error::other(format!(
                     "Couldn't deserialize: {}",
                     closure_p.display()
                 )));
             };
 
-            match services.entry(s.alias.clone()) {
+            match services.entry(service.alias.clone()) {
                 Entry::Occupied(o) => {
                     return Err(io::Error::other(format!(
                         "Alias {} redefined in: {}",
@@ -136,8 +137,8 @@ fn load_services(paths: &Vec<PathBuf>) -> Result<HashMap<String, Service>, io::E
                     )));
                 }
                 Entry::Vacant(v) => {
-                    s.file = closure_p;
-                    v.insert(s);
+                    service.file = closure_p;
+                    v.insert(service);
                     Ok(())
                 }
             }
@@ -159,6 +160,7 @@ impl Service {
         .stdout(Stdio::piped())
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
+        .envs(&self.env)
         .current_dir(&self.working_dir)
         .spawn()
     }
