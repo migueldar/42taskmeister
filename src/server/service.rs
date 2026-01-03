@@ -3,6 +3,7 @@ use std::{
     collections::{HashMap, hash_map::Entry},
     fs::{self},
     io,
+    os::unix::process::CommandExt,
     path::PathBuf,
     process::{Child, Command, Stdio},
 };
@@ -49,7 +50,7 @@ pub struct Service {
     pub stderr: String,
     env: HashMap<String, String>,
     working_dir: PathBuf,
-    umask: u16,
+    umask: u32,
 }
 
 // Cannot implement methods of foreign types, use struct wrapper to abstract it
@@ -152,17 +153,28 @@ impl Service {
     pub fn start(&self) -> Result<Child, io::Error> {
         let mut args = self.cmd.split_ascii_whitespace();
 
-        Command::new(
+        let mut cmd = Command::new(
             args.next()
                 .ok_or(io::Error::other("No command provided!"))?,
-        )
-        .args(args)
-        .stdout(Stdio::piped())
-        .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
-        .envs(&self.env)
-        .current_dir(&self.working_dir)
-        .spawn()
+        );
+
+        // Set the umask of cmd in a prelude (only libc without extra crates)
+        let umask = self.umask;
+        unsafe {
+            // NOTE: This is the posix umask used to remove permissions
+            cmd.pre_exec(move || {
+                libc::umask(umask);
+                Ok(())
+            });
+        }
+
+        cmd.args(args)
+            .stdout(Stdio::piped())
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .envs(&self.env)
+            .current_dir(&self.working_dir)
+            .spawn()
     }
 
     pub fn validate_exit_code(&self, exit_code: i32) -> bool {
