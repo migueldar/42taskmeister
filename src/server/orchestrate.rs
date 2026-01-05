@@ -201,7 +201,7 @@ impl Orchestrator {
             watcher::watch(
                 watched_jobs_thread,
                 tx_events,
-                Duration::from_millis(2000),
+                Duration::from_millis(100),
                 wlogger,
             );
         });

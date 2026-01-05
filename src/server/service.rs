@@ -29,7 +29,7 @@ pub enum RestartOptions {
     #[default]
     Never,
     Always(u8),
-    OnError(u8),
+    Unexpected(u8),
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
@@ -173,7 +173,7 @@ impl Service {
             .stdin(Stdio::piped())
             .stderr(Stdio::piped())
             .envs(&self.env)
-            .current_dir(&self.working_dir)
+            .current_dir(dir_utils::expand_home_dir(&self.working_dir))
             .spawn()
     }
 
