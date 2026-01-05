@@ -98,9 +98,9 @@ impl Orchestrator {
                         (event.status, false)
                     }
 
-                    RestartOptions::OnError(retries) => 'status: {
+                    RestartOptions::Unexpected(retries) => 'status: {
                         if let Some(current_retries) = self.inc_job_retries(&event.alias) {
-                            // Restrat if we didn't reach the maximum retries, and the code is error
+                            // Restrat if we didn't reach the maximum retries, and the code is not expected
                             if !service.validate_exit_code(exit_code) {
                                 if current_retries < retries {
                                     break 'status (event.status, true);

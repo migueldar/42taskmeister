@@ -23,7 +23,7 @@ use taskmeister::ResponsePart;
 #[derive(Debug)]
 pub enum OrchestratorError {
     ServiceNotFound,
-    ServiceUpdate,
+    ServiceUpdate(io::Error),
     ServiceStopped,
     ServiceAlreadyStarted,
     ServiceAlreadyStopping,
@@ -39,7 +39,9 @@ impl fmt::Display for OrchestratorError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             OrchestratorError::ServiceNotFound => write!(f, "Service not found"),
-            OrchestratorError::ServiceUpdate => write!(f, "While updating services"),
+            OrchestratorError::ServiceUpdate(error) => {
+                write!(f, "While updating services: {}", error)
+            }
             OrchestratorError::ServiceStopped => write!(f, "Stopping service"),
             OrchestratorError::ServiceAlreadyStarted => write!(f, "Service already started"),
             OrchestratorError::ServiceAlreadyStopping => write!(f, "Service already stopped"),
@@ -199,7 +201,7 @@ impl Orchestrator {
             watcher::watch(
                 watched_jobs_thread,
                 tx_events,
-                Duration::from_millis(2000),
+                Duration::from_millis(100),
                 wlogger,
             );
         });
@@ -251,7 +253,7 @@ impl Orchestrator {
                             }
                             Err(err) => {
                                 logger::error!(self.logger, "Updating services: {err}");
-                                Err(OrchestratorError::ServiceUpdate)
+                                Err(OrchestratorError::ServiceUpdate(err))
                             }
                         }
                         .into(),

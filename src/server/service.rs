@@ -1,8 +1,9 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{
     collections::{HashMap, hash_map::Entry},
     fs::{self},
     io,
+    os::unix::process::CommandExt,
     path::PathBuf,
     process::{Child, Command, Stdio},
 };
@@ -28,7 +29,7 @@ pub enum RestartOptions {
     #[default]
     Never,
     Always(u8),
-    OnError(u8),
+    Unexpected(u8),
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
@@ -37,18 +38,19 @@ pub struct Service {
     pub file: PathBuf,
     alias: String,
     cmd: String,
-    clone: u16,
+    numprocs: u16,
     pub restart: RestartOptions,
     pub start_time: u64,
+    #[serde(deserialize_with = "deserialize_signal")]
     pub stop_signal: i32,
     pub stop_wait: u64,
     exit_codes: Vec<i32>,
     pub stdout: String,
     pub stdin: String,
     pub stderr: String,
-    variables: Vec<(String, String)>,
+    env: HashMap<String, String>,
     working_dir: PathBuf,
-    umask: u16,
+    umask: u32,
 }
 
 // Cannot implement methods of foreign types, use struct wrapper to abstract it
@@ -119,14 +121,15 @@ fn load_services(paths: &Vec<PathBuf>) -> Result<HashMap<String, Service>, io::E
     for p in paths {
         let p = dir_utils::expand_home_dir(p);
         dir_utils::walk_dir(p, &mut |closure_p| {
-            let Ok(mut s) = toml::from_str::<Service>(&fs::read_to_string(&closure_p)?) else {
+            let Ok(mut service) = toml::from_str::<Service>(&fs::read_to_string(&closure_p)?)
+            else {
                 return Err(io::Error::other(format!(
                     "Couldn't deserialize: {}",
                     closure_p.display()
                 )));
             };
 
-            match services.entry(s.alias.clone()) {
+            match services.entry(service.alias.clone()) {
                 Entry::Occupied(o) => {
                     return Err(io::Error::other(format!(
                         "Alias {} redefined in: {}",
@@ -135,8 +138,8 @@ fn load_services(paths: &Vec<PathBuf>) -> Result<HashMap<String, Service>, io::E
                     )));
                 }
                 Entry::Vacant(v) => {
-                    s.file = closure_p;
-                    v.insert(s);
+                    service.file = closure_p;
+                    v.insert(service);
                     Ok(())
                 }
             }
@@ -150,16 +153,28 @@ impl Service {
     pub fn start(&self) -> Result<Child, io::Error> {
         let mut args = self.cmd.split_ascii_whitespace();
 
-        Command::new(
+        let mut cmd = Command::new(
             args.next()
                 .ok_or(io::Error::other("No command provided!"))?,
-        )
-        .args(args)
-        .stdout(Stdio::piped())
-        .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
-        .current_dir(&self.working_dir)
-        .spawn()
+        );
+
+        // Set the umask of cmd in a prelude (only libc without extra crates)
+        let umask = self.umask;
+        unsafe {
+            // NOTE: This is the posix umask used to remove permissions
+            cmd.pre_exec(move || {
+                libc::umask(umask);
+                Ok(())
+            });
+        }
+
+        cmd.args(args)
+            .stdout(Stdio::piped())
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .envs(&self.env)
+            .current_dir(dir_utils::expand_home_dir(&self.working_dir))
+            .spawn()
     }
 
     pub fn validate_exit_code(&self, exit_code: i32) -> bool {
@@ -170,4 +185,46 @@ impl Service {
         }
         return false;
     }
+}
+
+// UTILS
+
+fn signal_from_str(signal_string: &str) -> Option<i32> {
+    let name = signal_string.trim().to_ascii_uppercase();
+    let name = name.strip_prefix("SIG").unwrap_or(&name);
+
+    match name {
+        "HUP" => Some(libc::SIGHUP),
+        "INT" => Some(libc::SIGINT),
+        "QUIT" => Some(libc::SIGQUIT),
+        "ILL" => Some(libc::SIGILL),
+        "TRAP" => Some(libc::SIGTRAP),
+        "ABRT" => Some(libc::SIGABRT),
+        "BUS" => Some(libc::SIGBUS),
+        "FPE" => Some(libc::SIGFPE),
+        "KILL" => Some(libc::SIGKILL),
+        "USR1" => Some(libc::SIGUSR1),
+        "SEGV" => Some(libc::SIGSEGV),
+        "USR2" => Some(libc::SIGUSR2),
+        "PIPE" => Some(libc::SIGPIPE),
+        "ALRM" => Some(libc::SIGALRM),
+        "TERM" => Some(libc::SIGTERM),
+        "CHLD" => Some(libc::SIGCHLD),
+        "CONT" => Some(libc::SIGCONT),
+        "STOP" => Some(libc::SIGSTOP),
+        "TSTP" => Some(libc::SIGTSTP),
+        "TTIN" => Some(libc::SIGTTIN),
+        "TTOU" => Some(libc::SIGTTOU),
+        _ => None,
+    }
+}
+
+fn deserialize_signal<'de, D>(deserializer: D) -> Result<i32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let string = String::deserialize(deserializer)?;
+
+    signal_from_str(&string)
+        .ok_or_else(|| de::Error::custom(format!("Invalid Signal name: {string}")))
 }
