@@ -120,6 +120,11 @@ fn load_services(paths: &Vec<PathBuf>) -> Result<HashMap<String, Service>, io::E
 
     for p in paths {
         let p = dir_utils::expand_home_dir(p);
+
+        if !p.exists() {
+            return Err(io::Error::other(format!("Path not found: {p:?}")));
+        }
+
         dir_utils::walk_dir(p, &mut |closure_p| {
             let Ok(mut service) = toml::from_str::<Service>(&fs::read_to_string(&closure_p)?)
             else {
