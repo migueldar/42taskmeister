@@ -32,7 +32,7 @@ impl ParsedArgumets {
                 }
                 server_addr => {
                     ret.server_addr = Some(server_addr.parse().map_err(|err| {
-                        println!("{err}");
+                        eprintln!("Error: {err}\n");
                         ()
                     })?)
                 }

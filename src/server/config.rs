@@ -32,7 +32,7 @@ pub struct Start {
 }
 
 // Default values
-pub const CONFIG_PATH: &str = "~/.config/taskmeiker/server.toml";
+pub const CONFIG_PATH: &str = "~/.config/taskmeister/server.toml";
 pub const SERVER_ADDR: &str = "127.0.0.1:14242";
 
 impl Config {
