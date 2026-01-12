@@ -45,7 +45,6 @@ pub struct Job {
     pub status: JobStatus,
     pub started: Option<String>,
     pub retries: u8,
-    pub last_exit_code: i32, // TODO: Check the need of this
     pub flags: JobFlags,
     pub stdin: Option<ChildStdin>,
 }
@@ -68,7 +67,6 @@ impl Orchestrator {
         Ok(self.jobs.entry(alias.to_string()).or_insert(Job {
             status: JobStatus::Created,
             retries: 0,
-            last_exit_code: 0,
             flags: JobFlags::default(),
             started: None,
             stdin: None,
@@ -183,10 +181,9 @@ impl Orchestrator {
             | JobStatus::Running(_)
             | JobStatus::Stopping
             | JobStatus::TimedOut => Err(OrchestratorError::ServiceAlreadyStarted),
-            JobStatus::Finished(exit_status) => {
+            JobStatus::Finished(_) => {
                 // At this point event loop will have moved the job
                 // out from the watcher
-                job.last_exit_code = exit_status;
                 Ok(())
             }
             JobStatus::Created => Ok(()),
@@ -234,11 +231,11 @@ impl Orchestrator {
             JobStatus::Stopping | JobStatus::TimedOut => {
                 Err(OrchestratorError::ServiceAlreadyStopping)
             }
-            JobStatus::Finished(exit_status) => {
+            JobStatus::Finished(_) => {
                 // At this point event loop will have moved the job
                 // out from the watcher
-                job.last_exit_code = exit_status;
-                Err(OrchestratorError::ServiceStopped)
+                self.remove_service(alias);
+                return Ok(());
             }
             JobStatus::Created => Err(OrchestratorError::ServiceStopped),
         };

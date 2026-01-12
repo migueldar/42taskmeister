@@ -5,9 +5,9 @@ mod connection;
 use argument_parser::ParsedArgumets;
 use config::Config;
 use connection::Connection;
+use rustyline::error::ReadlineError;
 use rustyline::history::FileHistory;
 use rustyline::{DefaultEditor, Editor};
-use rustyline::error::ReadlineError;
 
 use std::error::Error;
 use std::fs::File;
@@ -74,13 +74,16 @@ fn main() -> PExitCode {
     let mut exit_code = ExitCode::OK;
 
     if parsed_args.command.is_some() {
-        connection.write(&parsed_args.command.unwrap(), &mut exit_code).map_err(|err| {
-            eprintln!("Connection error: {err}");
-        }).ok();
+        connection
+            .write(&parsed_args.command.unwrap(), &mut exit_code)
+            .map_err(|err| {
+                eprintln!("Connection error: {err}");
+            })
+            .ok();
         process::exit(exit_code.as_i32());
     }
 
-    let readline_init_func = || -> Result<Editor<(), FileHistory>, Box<dyn Error>> {            
+    let readline_init_func = || -> Result<Editor<(), FileHistory>, Box<dyn Error>> {
         let mut ret = DefaultEditor::new()?;
         if !config.history_file.exists() {
             File::create(&config.history_file)?;

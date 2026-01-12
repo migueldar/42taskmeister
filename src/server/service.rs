@@ -38,7 +38,7 @@ pub struct Service {
     pub file: PathBuf,
     alias: String,
     cmd: String,
-    numprocs: u16,
+    pub numprocs: u16,
     pub restart: RestartOptions,
     pub start_time: u64,
     #[serde(deserialize_with = "deserialize_signal")]
@@ -134,20 +134,35 @@ fn load_services(paths: &Vec<PathBuf>) -> Result<HashMap<String, Service>, io::E
                 )));
             };
 
-            match services.entry(service.alias.clone()) {
+            service.file = closure_p;
+
+            let mut insert_service = |alias: String, serv: Service| match services.entry(alias) {
                 Entry::Occupied(o) => {
                     return Err(io::Error::other(format!(
                         "Alias {} redefined in: {}",
                         o.key(),
-                        closure_p.display(),
+                        serv.file.display(),
                     )));
                 }
                 Entry::Vacant(v) => {
-                    service.file = closure_p;
-                    v.insert(service);
+                    v.insert(serv);
                     Ok(())
                 }
+            };
+
+            // If numprocs is > 1 insert virtual services in order to run multiple jobs
+            for (i, alias) in
+                taskmeister::generate_alias_names(&service.alias, service.numprocs).enumerate()
+            {
+                let mut service = service.clone();
+                service.alias = alias.clone();
+                if i > 0 {
+                    service.numprocs = 1;
+                }
+                insert_service(alias, service)?;
             }
+
+            Ok(())
         })?;
     }
 

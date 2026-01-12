@@ -90,3 +90,13 @@ where
         flags
     }
 }
+
+pub fn generate_alias_names<'a>(alias: &'a str, numprocs: u16) -> impl Iterator<Item = String> {
+    (1..=numprocs).map(move |n| {
+        if n == 1 {
+            alias.to_owned()
+        } else {
+            format!("{}.{}", alias, n - 1)
+        }
+    })
+}
