@@ -82,12 +82,7 @@ impl Services {
                     }
                     self.services.remove(alias);
                 }
-                Entry::Vacant(_) => {
-                    // TODO: Check if auto start, makes sense to not
-                    // start new services found automaatically
-                    // up.push(ServiceAction::Start(alias.clone()))
-                    ()
-                }
+                Entry::Vacant(_) => (),
             };
         }
 

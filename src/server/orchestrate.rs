@@ -214,9 +214,6 @@ impl Orchestrator {
         // If not job structure should be protecetd by mutex. This way only watched needs
         // protection since watcher also access the structure (in fact is the one
         // that consumes most of the lock time)
-
-        // TODO: Add a request to update services, maybe service should contain config
-
         while let Some(message) = self.messages_rx.iter().next() {
             match message {
                 OrchestratorMsg::Request(request) => {

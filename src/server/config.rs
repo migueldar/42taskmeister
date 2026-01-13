@@ -18,7 +18,7 @@ pub struct Config {
     pub syslog: bool,
     pub log_level: LogLevel,
     include: Include,
-    start: Start,
+    pub start: Start,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,7 +63,6 @@ impl Config {
                 log_level: LogLevel::Info,
                 include: Include { paths: Vec::new() },
                 start: Start {
-                    // TODO: USe this
                     services: Vec::new(),
                 },
             };

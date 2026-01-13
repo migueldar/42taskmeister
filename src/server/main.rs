@@ -92,6 +92,31 @@ fn process_request(
     Ok(())
 }
 
+fn startup_services(
+    services: &Vec<String>,
+    requests_tx: Sender<OrchestratorMsg>,
+) -> Result<(), Box<dyn Error>> {
+    for service in services {
+        let (tx, rx) = mpsc::channel();
+        requests_tx.send(OrchestratorMsg::Request(OrchestratorRequest {
+            action: ServiceAction::Start(service.to_owned()),
+            response_channel: tx,
+        }))?;
+
+        for response in rx {
+            if let ResponsePart::Error(err) = response {
+                return Err(std::io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Starting [{service}]: {err}"),
+                )
+                .into());
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let (cfg_path, args) = dir_utils::parse_config_path();
     let mut config = Config::load(cfg_path)?;
@@ -111,6 +136,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     thread::spawn(move || {
         orchestrator.orchestrate();
     });
+
+    // Start the services in init
+    startup_services(&config.start.services, requests_tx.clone())?;
 
     let listen_sock: TcpListener = TcpListener::bind(config.server_addr)?;
     let mut handlers = Vec::new();
@@ -141,9 +169,4 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         handlers.push(handle);
     }
-
-    // TODO: Manage signals?
-    // for handle in handlers {
-    //     handle.join().unwrap();
-    // }
 }
