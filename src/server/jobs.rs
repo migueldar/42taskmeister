@@ -5,6 +5,7 @@
 use libc;
 use logger::{self, LogLevel};
 use std::{
+    fmt::Display,
     io::{self, Write},
     process::ChildStdin,
     sync::mpsc::{self, Sender},
@@ -57,6 +58,19 @@ pub enum JobStatus {
     Stopping,
     Finished(i32),
     TimedOut,
+}
+
+impl Display for JobStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JobStatus::Created => write!(f, "Created"),
+            JobStatus::Starting => write!(f, "Starting"),
+            JobStatus::Running(_) => write!(f, "Running"),
+            JobStatus::Stopping => write!(f, "Stopping"),
+            JobStatus::Finished(exit_code) => write!(f, "Finished [Code: {}]", exit_code),
+            JobStatus::TimedOut => write!(f, "Timed Out"),
+        }
+    }
 }
 
 impl Orchestrator {
@@ -289,6 +303,23 @@ Stderr:
             stdout,
             stderr,
         ))
+    }
+
+    pub fn list_services(&self) -> String {
+        self.get_services()
+            .sorted()
+            .iter()
+            .fold(String::new(), |acc, service| {
+                acc + &format!(
+                    "\n{}:\t[{}]\n\tDefined: {}\n",
+                    &service.alias,
+                    match self.jobs.get(&service.alias) {
+                        Some(job) => job.status.to_string(),
+                        None => "Not Yet Started".to_owned(),
+                    },
+                    service.file.display(),
+                )
+            })
     }
 
     pub fn attach_job(

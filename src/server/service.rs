@@ -20,6 +20,7 @@ pub enum ServiceAction {
     Detach(String),
     Input(String, Vec<u8>),
     Reload,
+    List,
     Help,
 }
 
@@ -36,7 +37,7 @@ pub enum RestartOptions {
 pub struct Service {
     #[serde(skip)]
     pub file: PathBuf,
-    alias: String,
+    pub alias: String,
     cmd: String,
     pub numprocs: u16,
     pub restart: RestartOptions,
@@ -107,6 +108,12 @@ impl Services {
 
     pub fn remove(&mut self, alias: &str) -> Option<Service> {
         self.services.remove(alias)
+    }
+
+    pub fn sorted(&self) -> Vec<Service> {
+        let mut services: Vec<Service> = self.services.values().cloned().collect();
+        services.sort_by(|srv1, srv2| srv1.alias.cmp(&srv2.alias));
+        services
     }
 }
 

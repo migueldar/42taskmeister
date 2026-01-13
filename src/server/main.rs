@@ -46,6 +46,7 @@ fn command_to_action(req: Request) -> Option<ServiceAction> {
         "attach" | "at" => Some(ServiceAction::Attach(alias)),
         "detach" | "dt" => Some(ServiceAction::Detach(alias)),
         "reload" | "rl" => Some(ServiceAction::Reload),
+        "list" | "ls" => Some(ServiceAction::List),
         "help" | "?" => Some(ServiceAction::Help),
         _ => None,
     }

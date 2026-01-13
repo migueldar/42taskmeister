@@ -307,6 +307,7 @@ impl Orchestrator {
                                 continue;
                             }
                         }
+                        ServiceAction::List => ResponsePart::Info(self.list_services()),
                     };
 
                     request
