@@ -28,6 +28,8 @@ pub const CLI_HELP: &str = r#"Commands:
 	attach [at]	Attach the job to the current client
 	detach [dt] 	Detach the job from every client
 	reload [rl]	Reload the configuration for the services
+	list [ls]	List all loaded services
+	stop_server	Stop the server
 	help [?]	Show this help
 "#;
 
@@ -48,6 +50,7 @@ fn command_to_action(req: Request) -> Option<ServiceAction> {
         "reload" | "rl" => Some(ServiceAction::Reload),
         "list" | "ls" => Some(ServiceAction::List),
         "help" | "?" => Some(ServiceAction::Help),
+        "stop_server" => std::process::exit(0),
         _ => None,
     }
 }
