@@ -20,6 +20,7 @@ pub enum ServiceAction {
     Detach(String),
     Input(String, Vec<u8>),
     Reload,
+    List,
     Help,
 }
 
@@ -36,9 +37,9 @@ pub enum RestartOptions {
 pub struct Service {
     #[serde(skip)]
     pub file: PathBuf,
-    alias: String,
+    pub alias: String,
     cmd: String,
-    numprocs: u16,
+    pub numprocs: u16,
     pub restart: RestartOptions,
     pub start_time: u64,
     #[serde(deserialize_with = "deserialize_signal")]
@@ -82,12 +83,7 @@ impl Services {
                     }
                     self.services.remove(alias);
                 }
-                Entry::Vacant(_) => {
-                    // TODO: Check if auto start, makes sense to not
-                    // start new services found automaatically
-                    // up.push(ServiceAction::Start(alias.clone()))
-                    ()
-                }
+                Entry::Vacant(_) => (),
             };
         }
 
@@ -113,6 +109,12 @@ impl Services {
     pub fn remove(&mut self, alias: &str) -> Option<Service> {
         self.services.remove(alias)
     }
+
+    pub fn sorted(&self) -> Vec<Service> {
+        let mut services: Vec<Service> = self.services.values().cloned().collect();
+        services.sort_by(|srv1, srv2| srv1.alias.cmp(&srv2.alias));
+        services
+    }
 }
 
 fn load_services(paths: &Vec<PathBuf>) -> Result<HashMap<String, Service>, io::Error> {
@@ -134,20 +136,35 @@ fn load_services(paths: &Vec<PathBuf>) -> Result<HashMap<String, Service>, io::E
                 )));
             };
 
-            match services.entry(service.alias.clone()) {
+            service.file = closure_p;
+
+            let mut insert_service = |alias: String, serv: Service| match services.entry(alias) {
                 Entry::Occupied(o) => {
                     return Err(io::Error::other(format!(
                         "Alias {} redefined in: {}",
                         o.key(),
-                        closure_p.display(),
+                        serv.file.display(),
                     )));
                 }
                 Entry::Vacant(v) => {
-                    service.file = closure_p;
-                    v.insert(service);
+                    v.insert(serv);
                     Ok(())
                 }
+            };
+
+            // If numprocs is > 1 insert virtual services in order to run multiple jobs
+            for (i, alias) in
+                taskmeister::generate_alias_names(&service.alias, service.numprocs).enumerate()
+            {
+                let mut service = service.clone();
+                service.alias = alias.clone();
+                if i > 0 {
+                    service.numprocs = 1;
+                }
+                insert_service(alias, service)?;
             }
+
+            Ok(())
         })?;
     }
 

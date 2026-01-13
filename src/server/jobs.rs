@@ -5,6 +5,7 @@
 use libc;
 use logger::{self, LogLevel};
 use std::{
+    fmt::Display,
     io::{self, Write},
     process::ChildStdin,
     sync::mpsc::{self, Sender},
@@ -45,7 +46,6 @@ pub struct Job {
     pub status: JobStatus,
     pub started: Option<String>,
     pub retries: u8,
-    pub last_exit_code: i32, // TODO: Check the need of this
     pub flags: JobFlags,
     pub stdin: Option<ChildStdin>,
 }
@@ -60,6 +60,19 @@ pub enum JobStatus {
     TimedOut,
 }
 
+impl Display for JobStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JobStatus::Created => write!(f, "Created"),
+            JobStatus::Starting => write!(f, "Starting"),
+            JobStatus::Running(_) => write!(f, "Running"),
+            JobStatus::Stopping => write!(f, "Stopping"),
+            JobStatus::Finished(exit_code) => write!(f, "Finished (Exit Code: {})", exit_code),
+            JobStatus::TimedOut => write!(f, "Timed Out"),
+        }
+    }
+}
+
 impl Orchestrator {
     /// Checks for a job identified by alias. If the job does not exist it is created,
     /// and the status will be set to `Created`. If the job exists it returns it.
@@ -68,7 +81,6 @@ impl Orchestrator {
         Ok(self.jobs.entry(alias.to_string()).or_insert(Job {
             status: JobStatus::Created,
             retries: 0,
-            last_exit_code: 0,
             flags: JobFlags::default(),
             started: None,
             stdin: None,
@@ -183,10 +195,9 @@ impl Orchestrator {
             | JobStatus::Running(_)
             | JobStatus::Stopping
             | JobStatus::TimedOut => Err(OrchestratorError::ServiceAlreadyStarted),
-            JobStatus::Finished(exit_status) => {
+            JobStatus::Finished(_) => {
                 // At this point event loop will have moved the job
                 // out from the watcher
-                job.last_exit_code = exit_status;
                 Ok(())
             }
             JobStatus::Created => Ok(()),
@@ -234,11 +245,13 @@ impl Orchestrator {
             JobStatus::Stopping | JobStatus::TimedOut => {
                 Err(OrchestratorError::ServiceAlreadyStopping)
             }
-            JobStatus::Finished(exit_status) => {
+            JobStatus::Finished(_) => {
                 // At this point event loop will have moved the job
                 // out from the watcher
-                job.last_exit_code = exit_status;
-                Err(OrchestratorError::ServiceStopped)
+                if remove_service {
+                    self.remove_service(alias);
+                }
+                return Ok(());
             }
             JobStatus::Created => Err(OrchestratorError::ServiceStopped),
         };
@@ -292,6 +305,23 @@ Stderr:
             stdout,
             stderr,
         ))
+    }
+
+    pub fn list_services(&self) -> String {
+        self.get_services()
+            .sorted()
+            .iter()
+            .fold(String::new(), |acc, service| {
+                acc + &format!(
+                    "\n{}:\t[{}]\n\tDefined: {}\n",
+                    &service.alias,
+                    match self.jobs.get(&service.alias) {
+                        Some(job) => job.status.to_string(),
+                        None => "Not Yet Started".to_owned(),
+                    },
+                    service.file.display(),
+                )
+            })
     }
 
     pub fn attach_job(

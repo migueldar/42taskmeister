@@ -42,9 +42,9 @@ impl fmt::Display for OrchestratorError {
             OrchestratorError::ServiceUpdate(error) => {
                 write!(f, "While updating services: {}", error)
             }
-            OrchestratorError::ServiceStopped => write!(f, "Stopping service"),
+            OrchestratorError::ServiceStopped => write!(f, "Service already stopp"),
             OrchestratorError::ServiceAlreadyStarted => write!(f, "Service already started"),
-            OrchestratorError::ServiceAlreadyStopping => write!(f, "Service already stopped"),
+            OrchestratorError::ServiceAlreadyStopping => write!(f, "Service already stopping"),
             OrchestratorError::JobNotFound => write!(f, "Job not found"),
             OrchestratorError::JobIoError(error) => write!(f, "Job I/O error: {}", error),
             OrchestratorError::JobHasNoIoHandle => {
@@ -150,6 +150,10 @@ impl Orchestrator {
         self.services.remove(alias)
     }
 
+    pub fn remove_job(&mut self, alias: &str) -> Option<Job> {
+        self.jobs.remove(alias)
+    }
+
     pub fn set_watched_status(
         &mut self,
         alias: &str,
@@ -210,14 +214,21 @@ impl Orchestrator {
         // If not job structure should be protecetd by mutex. This way only watched needs
         // protection since watcher also access the structure (in fact is the one
         // that consumes most of the lock time)
-
-        // TODO: Add a request to update services, maybe service should contain config
-
         while let Some(message) = self.messages_rx.iter().next() {
             match message {
                 OrchestratorMsg::Request(request) => {
                     let result: ResponsePart = match request.action {
-                        ServiceAction::Start(alias) => self.start_request(&alias).into(),
+                        ServiceAction::Start(alias) => match self.services.get(&alias) {
+                            Some(service) => {
+                                taskmeister::generate_alias_names(&alias, service.numprocs)
+                                    .try_for_each(|new_alias| self.start_request(&new_alias))
+                                    .into()
+                            }
+                            None => {
+                                Err::<(), OrchestratorError>(OrchestratorError::ServiceNotFound)
+                                    .into()
+                            }
+                        },
                         ServiceAction::Restart(alias) => {
                             self.stop_request(&alias, false, true).into()
                         }
@@ -231,16 +242,32 @@ impl Orchestrator {
                                     res = match service {
                                         ServiceAction::Start(alias) => self.start_request(&alias),
                                         ServiceAction::Restart(alias) => {
-                                            match self.stop_request(&alias, true, true) {
+                                            match self.stop_request(&alias, false, true) {
                                                 // Service stopped error on restart is ok satus
-                                                Err(OrchestratorError::ServiceStopped) | Ok(_) => {
-                                                    Ok(())
-                                                }
+                                                Err(OrchestratorError::ServiceStopped)
+                                                | Err(OrchestratorError::JobNotFound)
+                                                | Ok(_) => Ok(()),
                                                 err => err,
                                             }
                                         }
                                         ServiceAction::Stop(alias) => {
-                                            self.stop_request(&alias, true, false)
+                                            // Stop and remove service
+                                            match self.stop_request(&alias, true, false) {
+                                                Ok(_) => {
+                                                    // The only place where a job is removed is
+                                                    // when reloading since we will loose track
+                                                    // of its status
+                                                    self.remove_job(&alias);
+                                                    Ok(())
+                                                }
+                                                Err(OrchestratorError::JobNotFound) => {
+                                                    // If job is not found, service was
+                                                    // never started
+                                                    self.remove_service(&alias);
+                                                    Ok(())
+                                                }
+                                                err => err,
+                                            }
                                         }
                                         _ => Ok(()),
                                     };
@@ -280,6 +307,7 @@ impl Orchestrator {
                                 continue;
                             }
                         }
+                        ServiceAction::List => ResponsePart::Info(self.list_services()),
                     };
 
                     request
