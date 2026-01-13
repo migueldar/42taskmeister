@@ -67,7 +67,7 @@ impl Display for JobStatus {
             JobStatus::Starting => write!(f, "Starting"),
             JobStatus::Running(_) => write!(f, "Running"),
             JobStatus::Stopping => write!(f, "Stopping"),
-            JobStatus::Finished(exit_code) => write!(f, "Finished [Code: {}]", exit_code),
+            JobStatus::Finished(exit_code) => write!(f, "Finished (Exit Code: {})", exit_code),
             JobStatus::TimedOut => write!(f, "Timed Out"),
         }
     }
@@ -248,7 +248,9 @@ impl Orchestrator {
             JobStatus::Finished(_) => {
                 // At this point event loop will have moved the job
                 // out from the watcher
-                self.remove_service(alias);
+                if remove_service {
+                    self.remove_service(alias);
+                }
                 return Ok(());
             }
             JobStatus::Created => Err(OrchestratorError::ServiceStopped),
