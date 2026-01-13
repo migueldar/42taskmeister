@@ -111,6 +111,9 @@ fn main() -> PExitCode {
                     eprintln!("Readline error: {err}");
                     return PExitCode::FAILURE;
                 }
+                if line == "quit" || line == "q" {
+                    std::process::exit(0);
+                }
                 if let Err(err) = connection.write(&line, &mut exit_code) {
                     eprintln!("Connection error: {err}");
                     break;

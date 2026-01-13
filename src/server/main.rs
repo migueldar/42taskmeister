@@ -29,6 +29,7 @@ pub const CLI_HELP: &str = r#"Commands:
 	detach [dt] 	Detach the job from every client
 	reload [rl]	Reload the configuration for the services
 	list [ls]	List all loaded services
+	quit [q]	Exit client
 	stop_server	Stop the server
 	help [?]	Show this help
 "#;
