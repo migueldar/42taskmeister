@@ -318,13 +318,23 @@ Stderr:
             .sorted()
             .iter()
             .fold(String::new(), |acc, service| {
+                let (status, pid) = match self.jobs.get(&service.alias) {
+                    Some(job) => (
+                        job.status.to_string(),
+                        self.get_pid(&service.alias)
+                            .unwrap_or(Vec::new())
+                            .iter()
+                            .map(|pid| pid.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                    None => ("Not Yet Started".to_owned(), "N/A".to_owned()),
+                };
                 acc + &format!(
-                    "\n{}:\t[{}]\n\tDefined: {}\n",
+                    "\n{}:\t[{} PID: {}]\n\tDefined: {}\n",
                     &service.alias,
-                    match self.jobs.get(&service.alias) {
-                        Some(job) => job.status.to_string(),
-                        None => "Not Yet Started".to_owned(),
-                    },
+                    status,
+                    pid,
                     service.file.display(),
                 )
             })
