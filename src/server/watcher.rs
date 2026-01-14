@@ -39,7 +39,6 @@ impl WatchedTimeout {
     }
 }
 
-#[derive(Debug)]
 pub struct Watched {
     pub process: Child,
     pub timeout: WatchedTimeout,
@@ -89,7 +88,7 @@ fn exit_status_to_job_status(status: io::Result<Option<ExitStatus>>) -> JobStatu
     match status {
         Ok(result) => match result {
             Some(exit_status) => JobStatus::Finished(*exit_status.code().get_or_insert(0)),
-            None => JobStatus::Running(true),
+            None => JobStatus::Running(false),
         },
         Err(_) => JobStatus::TimedOut,
     }

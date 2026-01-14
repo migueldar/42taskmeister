@@ -50,7 +50,7 @@ pub struct Job {
     pub stdin: Option<ChildStdin>,
 }
 
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone)]
 pub enum JobStatus {
     Created,
     Starting,
@@ -65,10 +65,11 @@ impl Display for JobStatus {
         match self {
             JobStatus::Created => write!(f, "Created"),
             JobStatus::Starting => write!(f, "Starting"),
-            JobStatus::Running(_) => write!(f, "Running"),
+            JobStatus::Running(false) => write!(f, "Running"),
+            JobStatus::Running(true) => write!(f, "Running (Healthy)"),
             JobStatus::Stopping => write!(f, "Stopping"),
             JobStatus::Finished(exit_code) => write!(f, "Finished (Exit Code: {})", exit_code),
-            JobStatus::TimedOut => write!(f, "Timed Out"),
+            JobStatus::TimedOut => write!(f, "Watcher Tick"),
         }
     }
 }
@@ -210,11 +211,11 @@ impl Orchestrator {
                     self.set_job_status(alias, JobStatus::Starting);
                     self.set_job_timestamp(alias);
 
-                    if let Some(old_watched_jobs) = res {
+                    if let Some(_) = res {
                         // TODO: Do something with old jobs in this case?
                         logger::warn!(
                             self.logger,
-                            "Started new jobs but old where not cleaned up from the watcher: {old_watched_jobs:?}"
+                            "Started new jobs but old where not cleaned up from the watcher"
                         );
                     }
 
@@ -283,7 +284,7 @@ impl Orchestrator {
         let (stdout, stderr) = self.io_router_requests.read_buff(alias);
 
         Ok(format!(
-            r#"status: {:?} Since {}
+            r#"status: {} Since {}
 PIDs: {}
 Configuration: {}
 Stdout:

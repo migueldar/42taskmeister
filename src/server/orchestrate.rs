@@ -154,22 +154,6 @@ impl Orchestrator {
         self.jobs.remove(alias)
     }
 
-    pub fn set_watched_status(
-        &mut self,
-        alias: &str,
-        new_status: JobStatus,
-    ) -> Result<(), OrchestratorError> {
-        self.watched
-            .lock()
-            .unwrap()
-            .get_mut(alias)
-            .ok_or(OrchestratorError::JobNotFound)?
-            .iter_mut()
-            .for_each(|watched_job| watched_job.previous_status = new_status.clone());
-
-        Ok(())
-    }
-
     pub fn get_pid(&self, alias: &str) -> Result<Vec<u32>, OrchestratorError> {
         Ok(self
             .watched
