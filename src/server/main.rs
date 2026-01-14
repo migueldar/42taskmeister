@@ -15,7 +15,10 @@ use std::{
     error::Error,
     io::{self, Write},
     net::{TcpListener, TcpStream},
-    sync::mpsc::{self, Sender},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Sender},
+    },
     thread::{self},
 };
 use taskmeister::{Request, ResponsePart, dir_utils};
@@ -28,8 +31,55 @@ pub const CLI_HELP: &str = r#"Commands:
 	attach [at]	Attach the job to the current client
 	detach [dt] 	Detach the job from every client
 	reload [rl]	Reload the configuration for the services
+	list [ls]	List all loaded services
+	quit [q]	Exit client
+	stop_server	Stop the server
 	help [?]	Show this help
 "#;
+
+static SIGHUP_FLAG: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn interrupt_handler(_: libc::c_int) {
+    SIGHUP_FLAG.store(true, Ordering::SeqCst);
+}
+
+fn sighup_reload_config_init(requests: Sender<OrchestratorMsg>, logger: Logger) {
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = interrupt_handler as usize;
+        libc::sigemptyset(&mut sa.sa_mask);
+        libc::sigaction(libc::SIGHUP, &sa, std::ptr::null_mut());
+    }
+
+    thread::spawn(move || {
+        loop {
+            if SIGHUP_FLAG.swap(false, Ordering::SeqCst) {
+                let (tx, rx) = mpsc::channel();
+
+                logger::info!(logger, "SIGHUP handler: Reloading Configuration");
+
+                if let Err(err) = requests.send(OrchestratorMsg::Request(OrchestratorRequest {
+                    action: ServiceAction::Reload,
+                    response_channel: tx,
+                })) {
+                    logger::error!(logger, "SIGHUP handler: {err}");
+                }
+
+                for response in rx {
+                    logger::info!(
+                        logger,
+                        "SIGHUP handler: {}",
+                        match response {
+                            ResponsePart::Error(err) => err.to_string(),
+                            ResponsePart::Info(resp) => resp,
+                            ResponsePart::Stream(_) => "Wrong Response: Stream".to_string(),
+                        }
+                    )
+                }
+            }
+        }
+    });
+}
 
 fn command_to_action(req: Request) -> Option<ServiceAction> {
     let alias = req.args.first().cloned().unwrap_or_default();
@@ -48,6 +98,7 @@ fn command_to_action(req: Request) -> Option<ServiceAction> {
         "reload" | "rl" => Some(ServiceAction::Reload),
         "list" | "ls" => Some(ServiceAction::List),
         "help" | "?" => Some(ServiceAction::Help),
+        "stop_server" => std::process::exit(0),
         _ => None,
     }
 }
@@ -140,6 +191,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Start the services in init
     startup_services(&config.start.services, requests_tx.clone())?;
+
+    // Handle sighup signal
+    sighup_reload_config_init(requests_tx.clone(), logger.clone());
 
     let listen_sock: TcpListener = TcpListener::bind(config.server_addr)?;
     let mut handlers = Vec::new();

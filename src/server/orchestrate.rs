@@ -42,7 +42,7 @@ impl fmt::Display for OrchestratorError {
             OrchestratorError::ServiceUpdate(error) => {
                 write!(f, "While updating services: {}", error)
             }
-            OrchestratorError::ServiceStopped => write!(f, "Service already stopp"),
+            OrchestratorError::ServiceStopped => write!(f, "Service already stopped"),
             OrchestratorError::ServiceAlreadyStarted => write!(f, "Service already started"),
             OrchestratorError::ServiceAlreadyStopping => write!(f, "Service already stopping"),
             OrchestratorError::JobNotFound => write!(f, "Job not found"),
@@ -142,6 +142,13 @@ impl Orchestrator {
         })
     }
 
+    pub fn reset_job_retries(&mut self, alias: &str) -> Option<u8> {
+        self.jobs.get_mut(alias).map(|job| {
+            job.retries = 0;
+            job.retries
+        })
+    }
+
     pub fn get_services(&self) -> &Services {
         &self.services
     }
@@ -152,22 +159,6 @@ impl Orchestrator {
 
     pub fn remove_job(&mut self, alias: &str) -> Option<Job> {
         self.jobs.remove(alias)
-    }
-
-    pub fn set_watched_status(
-        &mut self,
-        alias: &str,
-        new_status: JobStatus,
-    ) -> Result<(), OrchestratorError> {
-        self.watched
-            .lock()
-            .unwrap()
-            .get_mut(alias)
-            .ok_or(OrchestratorError::JobNotFound)?
-            .iter_mut()
-            .for_each(|watched_job| watched_job.previous_status = new_status.clone());
-
-        Ok(())
     }
 
     pub fn get_pid(&self, alias: &str) -> Result<Vec<u32>, OrchestratorError> {
@@ -221,7 +212,10 @@ impl Orchestrator {
                         ServiceAction::Start(alias) => match self.services.get(&alias) {
                             Some(service) => {
                                 taskmeister::generate_alias_names(&alias, service.numprocs)
-                                    .try_for_each(|new_alias| self.start_request(&new_alias))
+                                    .try_for_each(|new_alias| {
+                                        self.reset_job_retries(&new_alias);
+                                        self.start_request(&new_alias)
+                                    })
                                     .into()
                             }
                             None => {
@@ -230,6 +224,7 @@ impl Orchestrator {
                             }
                         },
                         ServiceAction::Restart(alias) => {
+                            self.reset_job_retries(&alias);
                             self.stop_request(&alias, false, true).into()
                         }
                         ServiceAction::Stop(alias) => {

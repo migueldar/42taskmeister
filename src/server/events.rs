@@ -8,7 +8,6 @@ use crate::{
 use logger::LogLevel;
 use std::time::Duration;
 
-#[derive(Debug)]
 pub struct JobEvent {
     pub alias: String,
     pub status: JobStatus,
@@ -16,7 +15,7 @@ pub struct JobEvent {
 
 impl Orchestrator {
     pub fn manage_event(&mut self, event: JobEvent) {
-        logger::info!(self.logger, "[Event] [{}] {:?}", event.alias, event.status);
+        logger::info!(self.logger, "[Event] [{}] {}", event.alias, event.status);
 
         let Some(service) = self.get_services().get(&event.alias).cloned() else {
             return;
@@ -27,31 +26,19 @@ impl Orchestrator {
         };
 
         let (new_status, restart) = match event.status {
-            JobStatus::Created | JobStatus::Starting | JobStatus::Stopping => (event.status, false),
+            JobStatus::Created
+            | JobStatus::Starting
+            | JobStatus::Running(true)
+            | JobStatus::Stopping => (event.status, false),
 
-            JobStatus::Running(_) => {
-                match previous_status {
-                    JobStatus::Created | JobStatus::Finished(_) | JobStatus::Running(_) => {
-                        (event.status, false)
-                    }
-                    JobStatus::Stopping => (JobStatus::Stopping, false),
-                    JobStatus::Starting => {
-                        logger::info!(self.logger, "[{}] Starting...", event.alias);
-                        // Watched to starting, wait the timeout to set the job as healthy
-                        self.set_watched_status(&event.alias, JobStatus::Running(false))
-                            .inspect_err(|err| {
-                                logger::error!(self.logger, "Setting watched status: {err}")
-                            })
-                            .ok();
-                        (JobStatus::Running(false), false)
-                    }
-
-                    JobStatus::TimedOut => {
-                        // If cames from timeout, means that the health startup
-                        // time has successfully completed
-                        logger::info!(self.logger, "[{}] Healthy ✅", event.alias);
-                        (JobStatus::Running(true), false)
-                    }
+            JobStatus::Running(false) => {
+                if matches!(previous_status, JobStatus::Running(true)) {
+                    // If previous status was Running(true) it means it comes
+                    // from a timeout which means it is healthy now
+                    logger::info!(self.logger, "[{}] Healthy ✅", event.alias);
+                    (previous_status, false)
+                } else {
+                    (event.status, false)
                 }
             }
 

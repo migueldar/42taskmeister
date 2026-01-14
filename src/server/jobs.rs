@@ -50,7 +50,7 @@ pub struct Job {
     pub stdin: Option<ChildStdin>,
 }
 
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone)]
 pub enum JobStatus {
     Created,
     Starting,
@@ -65,10 +65,11 @@ impl Display for JobStatus {
         match self {
             JobStatus::Created => write!(f, "Created"),
             JobStatus::Starting => write!(f, "Starting"),
-            JobStatus::Running(_) => write!(f, "Running"),
+            JobStatus::Running(false) => write!(f, "Running"),
+            JobStatus::Running(true) => write!(f, "Running (Healthy)"),
             JobStatus::Stopping => write!(f, "Stopping"),
             JobStatus::Finished(exit_code) => write!(f, "Finished (Exit Code: {})", exit_code),
-            JobStatus::TimedOut => write!(f, "Timed Out"),
+            JobStatus::TimedOut => write!(f, "Watcher Tick"),
         }
     }
 }
@@ -210,11 +211,11 @@ impl Orchestrator {
                     self.set_job_status(alias, JobStatus::Starting);
                     self.set_job_timestamp(alias);
 
-                    if let Some(old_watched_jobs) = res {
+                    if let Some(_) = res {
                         // TODO: Do something with old jobs in this case?
                         logger::warn!(
                             self.logger,
-                            "Started new jobs but old where not cleaned up from the watcher: {old_watched_jobs:?}"
+                            "Started new jobs but old where not cleaned up from the watcher"
                         );
                     }
 
@@ -251,6 +252,11 @@ impl Orchestrator {
                 if remove_service {
                     self.remove_service(alias);
                 }
+
+                if restart_job {
+                    return Err(OrchestratorError::ServiceStopped);
+                }
+
                 return Ok(());
             }
             JobStatus::Created => Err(OrchestratorError::ServiceStopped),
@@ -283,7 +289,7 @@ impl Orchestrator {
         let (stdout, stderr) = self.io_router_requests.read_buff(alias);
 
         Ok(format!(
-            r#"status: {:?} Since {}
+            r#"status: {} Since {}
 PIDs: {}
 Configuration: {}
 Stdout:
@@ -312,13 +318,23 @@ Stderr:
             .sorted()
             .iter()
             .fold(String::new(), |acc, service| {
+                let (status, pid) = match self.jobs.get(&service.alias) {
+                    Some(job) => (
+                        job.status.to_string(),
+                        self.get_pid(&service.alias)
+                            .unwrap_or(Vec::new())
+                            .iter()
+                            .map(|pid| pid.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                    None => ("Not Yet Started".to_owned(), "N/A".to_owned()),
+                };
                 acc + &format!(
-                    "\n{}:\t[{}]\n\tDefined: {}\n",
+                    "\n{}:\t[{} PID: {}]\n\tDefined: {}\n",
                     &service.alias,
-                    match self.jobs.get(&service.alias) {
-                        Some(job) => job.status.to_string(),
-                        None => "Not Yet Started".to_owned(),
-                    },
+                    status,
+                    pid,
                     service.file.display(),
                 )
             })
