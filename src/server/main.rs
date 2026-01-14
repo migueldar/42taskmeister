@@ -20,6 +20,7 @@ use std::{
         mpsc::{self, Sender},
     },
     thread::{self},
+    time::Duration,
 };
 use taskmeister::{Request, ResponsePart, dir_utils};
 
@@ -77,6 +78,7 @@ fn sighup_reload_config_init(requests: Sender<OrchestratorMsg>, logger: Logger) 
                     )
                 }
             }
+            thread::sleep(Duration::from_millis(100));
         }
     });
 }
