@@ -252,6 +252,11 @@ impl Orchestrator {
                 if remove_service {
                     self.remove_service(alias);
                 }
+
+                if restart_job {
+                    return Err(OrchestratorError::ServiceStopped);
+                }
+
                 return Ok(());
             }
             JobStatus::Created => Err(OrchestratorError::ServiceStopped),
